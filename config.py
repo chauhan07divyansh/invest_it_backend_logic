@@ -5,17 +5,20 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # === API KEYS ===
 NEWS_API_KEY = os.getenv("NEWS_API_KEY", "dd33ebe105ea4b02a3b7e77bc4a93d01")
-HF_API_KEY = os.getenv("HF_API_KEY")  # Set this in Render dashboard
+HF_API_KEY = os.getenv("HF_API_KEY")  # Set this in Render dashboard (Environment → Add Variable)
 
 # === HUGGING FACE MODEL ENDPOINTS ===
-# Replace with your actual model endpoints
+# ⚠️ These URLs currently point to Hugging Face’s *web* interface, not raw files.
+# For programmatic access (Render fetching models), you’ll need the *raw file URLs* or use Hugging Face Hub download.
+
 HF_SBERT_MODEL_URL = os.getenv(
     "HF_SBERT_MODEL_URL",
-    "https://huggingface.co/spaces/Brosoverhoes07/financial-model/blob/main/sentiment_pipeline_chunking.joblib"
+    "https://huggingface.co/Brosoverhoes07/financial-model/resolve/main/sentiment_pipeline_chunking.joblib"
 )
+
 HF_MDA_MODEL_URL = os.getenv(
     "HF_MDA_MODEL_URL",
-    "https://huggingface.co/spaces/Brosoverhoes07/financial-model/blob/main/best_model_fold_1.pth"
+    "https://huggingface.co/Brosoverhoes07/financial-model/resolve/main/best_model_fold_1.pth"
 )
 
 # === TRADING PARAMETERS ===
@@ -39,3 +42,5 @@ SWING_TRADING_PARAMS = {
     'max_portfolio_risk': 0.10,
     'profit_target_multiplier': 2.5,
 }
+
+
