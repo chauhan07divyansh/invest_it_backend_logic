@@ -467,5 +467,13 @@ def internal_error(error):
     return jsonify({'success': False, 'error': 'Internal server error'}), 500
 
 
-if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port= 7860, use_reloader=False)
+if __name__ == "__main__":
+    from waitress import serve
+    import os
+
+    # Prevent duplicate logs in Render logs
+    logging.getLogger('waitress').setLevel(logging.WARNING)
+
+    port = int(os.environ.get("PORT", 5000))
+    serve(app, host="0.0.0.0", port=port)
+
