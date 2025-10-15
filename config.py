@@ -1,17 +1,24 @@
 import os
 
-# This automatically finds the root directory of your project.
+# === BASE SETTINGS ===
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# API KEYS
+# === API KEYS ===
 NEWS_API_KEY = os.getenv("NEWS_API_KEY", "dd33ebe105ea4b02a3b7e77bc4a93d01")
+HF_API_KEY = os.getenv("HF_API_KEY")  # Set this in Render dashboard
 
-# --- FILE PATHS (Assumes a 'models' folder is inside your project) ---
-MODELS_DIR = os.path.join(BASE_DIR, "models")
-SBERT_MODEL_PATH = os.path.join(MODELS_DIR, "sentiment_pipeline_chunking.joblib")
-MDA_MODEL_PATH = os.path.join(MODELS_DIR, "best_model_fold_1.pth")
+# === HUGGING FACE MODEL ENDPOINTS ===
+# Replace with your actual model endpoints
+HF_SBERT_MODEL_URL = os.getenv(
+    "HF_SBERT_MODEL_URL",
+    "https://huggingface.co/spaces/Brosoverhoes07/financial-model/blob/main/sentiment_pipeline_chunking.joblib"
+)
+HF_MDA_MODEL_URL = os.getenv(
+    "HF_MDA_MODEL_URL",
+    "https://huggingface.co/spaces/Brosoverhoes07/financial-model/blob/main/best_model_fold_1.pth"
+)
 
-# --- TRADING PARAMETERS ---
+# === TRADING PARAMETERS ===
 POSITION_TRADING_PARAMS = {
     'min_holding_period': 90,
     'max_holding_period': 1095,
@@ -24,6 +31,7 @@ POSITION_TRADING_PARAMS = {
     'sentiment_weight': 0.10,
     'mda_weight': 0.10,
 }
+
 SWING_TRADING_PARAMS = {
     'min_holding_period': 3,
     'max_holding_period': 30,
