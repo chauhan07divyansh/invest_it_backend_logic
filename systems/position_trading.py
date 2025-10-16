@@ -50,6 +50,12 @@ class EnhancedPositionTradingSystem:
                 self.mda_api_available = False
                 logger.warning("⚠️ HF_MDA_API_URL not set. Using sample data fallback for MDA analysis.")
 
+            # --- ADD SESSION FOR ROBUST DATA FETCHING ---
+            self.session = requests.Session()
+            self.session.headers.update({
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            })
+
             logger.info("✅ EnhancedPositionTradingSystem initialized successfully")
 
         except Exception as e:
@@ -87,12 +93,12 @@ class EnhancedPositionTradingSystem:
 
             if api_results is None:
                 raise ValueError("API call to MDA HF Space failed or returned no data.")
-
+            
             # This logic assumes your API returns a list of sentiment dictionaries.
             # You must adapt this to your actual API output format.
             sentiments = [res.get('label') for res in api_results]
             confidences = [res.get('score') for res in api_results]
-
+            
             sentiment_scores = []
             for sentiment, confidence in zip(sentiments, confidences):
                 if str(sentiment).lower() in ['positive', 'very_positive', 'label_4', 'label_3']:
@@ -101,18 +107,15 @@ class EnhancedPositionTradingSystem:
                     sentiment_scores.append(-confidence)
                 else:
                     sentiment_scores.append(0)
-
+            
             avg_sentiment = np.mean(sentiment_scores) if sentiment_scores else 0
             mda_score = 50 + (avg_sentiment * 50)
             mda_score = max(0, min(100, mda_score))
-
+            
             management_tone = "Neutral"
-            if mda_score >= 70:
-                management_tone = "Very Optimistic"
-            elif mda_score >= 60:
-                management_tone = "Optimistic"
-            elif mda_score <= 40:
-                management_tone = "Pessimistic"
+            if mda_score >= 70: management_tone = "Very Optimistic"
+            elif mda_score >= 60: management_tone = "Optimistic"
+            elif mda_score <= 40: management_tone = "Pessimistic"
 
             return {
                 'mda_score': mda_score,
@@ -123,6 +126,60 @@ class EnhancedPositionTradingSystem:
         except (ValueError, TypeError, IndexError, AttributeError) as e:
             logging.error(f"Could not parse MDA API response. Error: {e}. Response: {api_results}")
             return None
+
+    # ==============================================================================
+    #  UPDATED: CORE ANALYSIS METHODS
+    # ==============================================================================
+
+    def analyze_news_sentiment(self, symbol, num_articles=20):
+        """Main sentiment analysis function updated to use the API."""
+        try:
+            articles = self.fetch_indian_news(symbol, num_articles) or self.get_sample_news(symbol)
+            news_source = "Real news (NewsAPI)" if articles else "Sample news"
+
+            if not articles:
+                return [], [], [], "No Analysis", "No Source"
+
+            if self.sentiment_api_available:
+                api_result = self._analyze_sentiment_via_api(articles)
+                if api_result:
+                    sentiments, confidences = api_result
+                    return sentiments, articles, confidences, "SBERT API", news_source
+            
+            logging.warning(f"Falling back to TextBlob for news sentiment for {symbol}.")
+            sentiments, confidences = self.analyze_sentiment_with_textblob(articles)
+            return sentiments, articles, confidences, "TextBlob Fallback", news_source
+        except Exception as e:
+            logging.error(f"Error in news sentiment analysis for {symbol}: {e}")
+            return [], [], [], "Error", "Error"
+
+    def updated_analyze_mda_sentiment(self, symbol):
+        """Updated to prioritize API calls for real MD&A extraction and analysis."""
+        try:
+            if not self.mda_api_available:
+                logger.warning("MDA API URL not configured. Using sample analysis as fallback.")
+                return self.get_sample_mda_analysis(symbol)
+
+            extractor = self.ImprovedMDAExtractor()
+            mda_texts = extractor.get_mda_text(symbol, max_reports=3)
+
+            if not mda_texts:
+                logger.warning(f"No real MDA text found for {symbol}, using sample analysis.")
+                return self.get_sample_mda_analysis(symbol)
+            
+            logger.info(f"Sending {len(mda_texts)} MD&A texts to the API for analysis.")
+            api_result = self._analyze_mda_via_api(mda_texts)
+
+            if api_result:
+                return api_result
+            
+            logger.warning(f"MDA API call failed for {symbol}. Using sample analysis as fallback.")
+            return self.get_sample_mda_analysis(symbol)
+            
+        except Exception as e:
+            logger.error(f"An unexpected error in MDA sentiment analysis for {symbol}: {e}")
+            return self.get_sample_mda_analysis(symbol)
+            
     def _validate_trading_params(self):
         """Validate position trading parameters"""
         try:
@@ -1101,16 +1158,14 @@ class EnhancedPositionTradingSystem:
     
 
     def get_indian_stock_data(self, symbol, period="5y"):
-        """Get Indian stock data with extended period for position trading"""
+        """Get Indian stock data using a session to avoid being blocked."""
         try:
             if not symbol:
                 raise ValueError("Empty symbol provided")
-
             symbol = str(symbol).upper().replace(" ", "").replace(".", "")
             if not symbol:
                 raise ValueError("Invalid symbol after cleaning")
 
-            # Enhanced Indian stocks mapping
             symbol_mappings = {
                 "RELIANCE": "RELIANCE.NS", "TCS": "TCS.NS", "INFY": "INFY.NS",
                 "HDFCBANK": "HDFCBANK.NS", "BAJFINANCE": "BAJFINANCE.NS",
@@ -1123,7 +1178,6 @@ class EnhancedPositionTradingSystem:
                 "WIPRO": "WIPRO.NS", "TECHM": "TECHM.NS", "POWERGRID": "POWERGRID.NS",
                 "ITC": "ITC.NS", "TATAMOTORS": "TATAMOTORS.NS",
             }
-
             symbols_to_try = [f"{symbol}.NS", f"{symbol}.BO", symbol]
             if symbol in symbol_mappings:
                 symbols_to_try.insert(0, symbol_mappings[symbol])
@@ -1131,42 +1185,31 @@ class EnhancedPositionTradingSystem:
             for sym in symbols_to_try:
                 try:
                     logger.info(f"Trying to fetch data for {sym}")
-                    ticker = yf.Ticker(sym)
-
-                    # Add timeout and retry logic
+                    # --- THIS IS THE CRITICAL CHANGE ---
+                    ticker = yf.Ticker(sym, session=self.session)
                     data = ticker.history(period=period, timeout=30)
 
-                    if data is None or data.empty:
-                        logger.warning(f"No data returned for {sym}")
+                    if data is None or data.empty or len(data) < 252:
+                        logger.warning(f"No/insufficient data for {sym}")
                         continue
-
-                    if len(data) < 252:  # Need at least 1 year of data for position trading
-                        logger.warning(f"Insufficient data for position trading {sym}: {len(data)} days")
-                        continue
-
-                    # Validate data quality
                     if data['Close'].isna().all():
                         logger.warning(f"All Close prices are NaN for {sym}")
                         continue
-
-                    # Try to get info (optional, might fail for some stocks)
+                    
                     info = {}
-                    try:
+                    try: 
                         info = ticker.info
-                    except Exception as info_error:
-                        logger.warning(f"Could not fetch info for {sym}: {str(info_error)}")
-                        info = {}
-
+                    except Exception:
+                        pass
+                    
                     logger.info(f"Successfully fetched data for {sym}: {len(data)} days")
                     return data, info, sym
-
                 except Exception as e:
                     logger.warning(f"Failed to fetch data for {sym}: {str(e)}")
                     continue
-
+            
             logger.error(f"Failed to fetch data for all variations of {symbol}")
             return None, None, None
-
         except Exception as e:
             logger.error(f"Error in get_indian_stock_data for {symbol}: {str(e)}")
             return None, None, None
@@ -2255,6 +2298,7 @@ class EnhancedPositionTradingSystem:
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger: logging.Logger = logging.getLogger(__name__)
+
 
 
 
