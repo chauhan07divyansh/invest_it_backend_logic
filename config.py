@@ -17,10 +17,11 @@ HF_MDA_MODEL_URL = os.getenv(
     "HF_MDA_MODEL_URL",
     "https://huggingface.co/Brosoverhoes07/financial-model/resolve/main/best_model_fold_1.pth"
 )
+from hf_utils import download_model_from_hf
 
-# === Backward Compatibility for Older Code ===
-SBERT_MODEL_PATH = HF_SBERT_MODEL_URL
-MDA_MODEL_PATH = HF_MDA_MODEL_URL
+# === MODEL DOWNLOAD FROM HUGGING FACE ===
+SBERT_MODEL_PATH = download_model_from_hf("Brosoverhoes07/financial-model", "sentiment_pipeline_chunking.joblib")
+MDA_MODEL_PATH = download_model_from_hf("Brosoverhoes07/financial-model", "best_model_fold_1.pth")
 
 # === TRADING PARAMETERS ===
 POSITION_TRADING_PARAMS = {
@@ -43,6 +44,7 @@ SWING_TRADING_PARAMS = {
     'max_portfolio_risk': 0.10,
     'profit_target_multiplier': 2.5,
 }
+
 
 
 
