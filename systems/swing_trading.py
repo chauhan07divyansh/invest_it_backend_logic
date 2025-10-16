@@ -7,7 +7,7 @@ from colorama import Fore, Style
 import config
 from .common_classes import SBERTTransformer, SBERT_AVAILABLE
 from hf_utils import download_model_from_hf
-
+from hf_utils import query_hf_api
 warnings.filterwarnings('ignore')
 logger = logging.getLogger(__name__)
 
@@ -16,31 +16,26 @@ class EnhancedSwingTradingSystem:
         try:
             self.news_api_key = config.NEWS_API_KEY
             self.swing_trading_params = config.SWING_TRADING_PARAMS
-            self.sentiment_pipeline, self.model_loaded, self.model_type = None, False, "None"
-
-            # --- Validate Trading Parameters ---
             self._validate_trading_params()
-
-            # --- Handle SBERT Sentiment Model ---
-            sbert_model_path = getattr(config, "SBERT_MODEL_PATH", None)
-            if sbert_model_path:
-                if sbert_model_path.startswith("http"):
-                    logger.info("Downloading SBERT model from Hugging Face Hub...")
-                    sbert_model_path = download_model_from_hf(
-                        "Brosoverhoes07/financial-model",
-                        os.path.basename(sbert_model_path)
-                    )
-                self.load_sbert_model(sbert_model_path)
-            else:
-                logger.warning("⚠️ SBERT model path not configured.")
-
-            # --- Initialize stock universe ---
             self.initialize_stock_database()
+
+            # --- API CONFIGURATION CHECK ---
+            # This replaces all the old model download and load logic.
+            self.sentiment_api_url = config.HF_SENTIMENT_API_URL
+            
+            if self.sentiment_api_url:
+                self.model_api_available = True
+                self.model_type = "SBERT API"
+                logger.info("✅ SBERT Sentiment Model API is configured and ready.")
+            else:
+                self.model_api_available = False
+                self.model_type = "TextBlob"
+                logger.warning("⚠️ HF_SENTIMENT_API_URL environment variable not set. Sentiment analysis will use TextBlob as a fallback.")
+
             logger.info("✅ EnhancedSwingTradingSystem initialized successfully")
 
         except Exception as e:
             logger.error(f"❌ Error initializing EnhancedSwingTradingSystem: {e}")
-            traceback.print_exc()
             raise
 
 
@@ -770,33 +765,37 @@ class EnhancedSwingTradingSystem:
             return [f"Market analysis for {symbol}", f"Investment opportunity in {symbol}"]
 
 
-    def analyze_sentiment_with_sbert(self, articles):
-        """Analyze sentiment using trained SBERT model with error handling"""
+    def _analyze_sentiment_via_api(self, articles: list) -> tuple[list, list] | None:
+        """
+        Analyzes sentiment by calling the remote Hugging Face API endpoint.
+        This is a private helper method.
+        """
         try:
-            if not articles or not self.model_loaded:
-                return self.analyze_sentiment_with_textblob(articles)
+            # Structure the payload as required by most HF Inference APIs
+            payload = {"inputs": articles}
+            
+            # Use the utility function to make the API call
+            api_results = query_hf_api(self.sentiment_api_url, payload)
 
-            if not all([self.vectorizer, self.model, self.label_encoder]):
-                logger.error("SBERT model components missing")
-                return self.analyze_sentiment_with_textblob(articles)
+            if api_results is None:
+                raise ValueError("API call to Hugging Face failed or returned no data.")
 
-            embeddings = self.vectorizer.transform(articles)
+            # IMPORTANT: This parsing logic assumes your API returns a list of dictionaries,
+            # like: [{'label': 'positive', 'score': 0.98}, ...].
+            # You may need to adjust this based on your specific model's output.
+            
+            # Handle cases where the API might wrap the result in an extra list
+            if isinstance(api_results, list) and len(api_results) > 0 and isinstance(api_results[0], list):
+                api_results = api_results[0]
 
-            if embeddings is None or len(embeddings) == 0:
-                logger.error("Failed to generate embeddings")
-                return self.analyze_sentiment_with_textblob(articles)
-
-            predictions = self.model.predict(embeddings)
-            probabilities = self.model.predict_proba(embeddings)
-
-            sentiment_labels = self.label_encoder.inverse_transform(predictions)
-            confidence_scores = np.max(probabilities, axis=1)
-
-            return sentiment_labels.tolist(), confidence_scores.tolist()
-
-        except Exception as e:
-            logger.error(f"Error in SBERT sentiment analysis: {str(e)}")
-            return self.analyze_sentiment_with_textblob(articles)
+            sentiments = [res.get('label', 'neutral').lower() for res in api_results]
+            confidences = [res.get('score', 0.5) for res in api_results]
+            
+            return sentiments, confidences
+            
+        except (ValueError, TypeError, IndexError, AttributeError) as e:
+            logging.error(f"Could not parse API response. Error: {e}. Response received: {api_results}")
+            return None
 
 
     def analyze_sentiment_with_textblob(self, articles):
@@ -835,7 +834,10 @@ class EnhancedSwingTradingSystem:
 
 
     def analyze_news_sentiment(self, symbol, num_articles=15):
-        """Main sentiment analysis function with comprehensive error handling"""
+        """
+        Main sentiment analysis function updated to use the API.
+        It orchestrates fetching news and calling the appropriate analysis method.
+        """
         try:
             articles = self.fetch_indian_news(symbol, num_articles)
             news_source = "Real news (NewsAPI)" if articles else "Sample news"
@@ -847,17 +849,23 @@ class EnhancedSwingTradingSystem:
                 logger.error(f"No articles available for {symbol}")
                 return [], [], [], "No Analysis", "No Source"
 
-            if self.model_loaded:
-                sentiments, confidences = self.analyze_sentiment_with_sbert(articles)
-                analysis_method = f"SBERT Model ({self.model_type})"
-            else:
-                sentiments, confidences = self.analyze_sentiment_with_textblob(articles)
-                analysis_method = "TextBlob Fallback"
+            # --- CORE LOGIC UPDATE ---
+            # 1. Try to use the API first if it's configured
+            if self.model_api_available:
+                api_result = self._analyze_sentiment_via_api(articles)
+                if api_result:
+                    sentiments, confidences = api_result
+                    analysis_method = "SBERT API"
+                    return sentiments, articles, confidences, analysis_method, news_source
 
+            # 2. If the API is not available or the call failed, fall back to TextBlob
+            logger.warning(f"Falling back to TextBlob for {symbol}.")
+            sentiments, confidences = self.analyze_sentiment_with_textblob(articles)
+            analysis_method = "TextBlob Fallback"
             return sentiments, articles, confidences, analysis_method, news_source
 
         except Exception as e:
-            logger.error(f"Error in news sentiment analysis for {symbol}: {str(e)}")
+            logger.error(f"Error in news sentiment analysis for {symbol}: {e}")
             return [], [], [], "Error", "Error"
 
 
@@ -1678,6 +1686,7 @@ class EnhancedSwingTradingSystem:
         except Exception as e:
             logger.error(f"Error printing analysis summary: {str(e)}")
             print(f"Error generating analysis summary: {str(e)}")
+
 
 
 
