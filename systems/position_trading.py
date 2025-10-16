@@ -1,75 +1,128 @@
-import os, re, time, logging, traceback
-import sys
-from systems.common_classes import SBERTTransformer
-sys.modules['__main__'].SBERTTransformer = SBERTTransformer
+import os
+import re
+import time
+import logging
+import traceback
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
-import joblib, numpy as np, pandas as pd, requests, yfinance as yf
+from typing import Dict, List, Optional
+
+import numpy as np
+import pandas as pd
+import yfinance as yf
 from bs4 import BeautifulSoup
 from textblob import TextBlob
-import torch, torch.nn as nn
-from transformers import AutoTokenizer, AutoModel
 import warnings
+import requests
+
+# Local application imports
 import config
-from .common_classes import SBERTTransformer, MDASentimentModel, SBERT_AVAILABLE
+from hf_utils import query_hf_api  # Use the new API utility
 
 warnings.filterwarnings('ignore')
 logger = logging.getLogger(__name__)
 
-from hf_utils import download_model_from_hf
-import os
-import logging
 
 class EnhancedPositionTradingSystem:
     def __init__(self):
         try:
             self.news_api_key = config.NEWS_API_KEY
             self.position_trading_params = config.POSITION_TRADING_PARAMS
-            self.model_loaded, self.mda_available = False, False
-            self.model_type, self.mda_sentiment_model = "None", None
-
-            # --- Handle MDA Model (PyTorch) ---
-            mda_model_path = getattr(config, "MDA_MODEL_PATH", None)
-            if mda_model_path:
-                if mda_model_path.startswith("http"):
-                    logger.info("Downloading MDA model from Hugging Face Hub...")
-                    mda_model_path = download_model_from_hf(
-                        "Brosoverhoes07/financial-model",
-                        os.path.basename(mda_model_path)
-                    )
-                if os.path.exists(mda_model_path):
-                    self.mda_sentiment_model = MDASentimentModel(mda_model_path)
-                    self.mda_available = self.mda_sentiment_model.is_available()
-                    logger.info("✅ MDA sentiment model loaded successfully.")
-                else:
-                    logger.warning("⚠️ MDA model file not found — continuing without it.")
-
-            # --- Handle SBERT Sentiment Model ---
-            sbert_model_path = getattr(config, "SBERT_MODEL_PATH", None)
-            if sbert_model_path:
-                if sbert_model_path.startswith("http"):
-                    logger.info("Downloading SBERT model from Hugging Face Hub...")
-                    sbert_model_path = download_model_from_hf(
-                        "Brosoverhoes07/financial-model",
-                        os.path.basename(sbert_model_path)
-                    )
-                self.load_trained_sbert_model(sbert_model_path)
-            else:
-                logger.warning("⚠️ SBERT model path not configured.")
-
-            # --- Finish setup ---
             self._validate_trading_params()
             self.initialize_stock_database()
+
+            # --- API CONFIGURATION CHECK FOR SBERT (NEWS SENTIMENT) ---
+            self.sentiment_api_url = config.HF_SENTIMENT_API_URL
+            if self.sentiment_api_url:
+                self.sentiment_api_available = True
+                self.model_type = "SBERT API"
+                logger.info("✅ SBERT Sentiment Model API is configured.")
+            else:
+                self.sentiment_api_available = False
+                self.model_type = "TextBlob"
+                logger.warning("⚠️ HF_SENTIMENT_API_URL not set. Using TextBlob fallback for news sentiment.")
+
+            # --- API CONFIGURATION CHECK FOR MDA (MANAGEMENT TONE) ---
+            self.mda_api_url = config.HF_MDA_API_URL
+            if self.mda_api_url:
+                self.mda_api_available = True
+                logger.info("✅ MDA Sentiment Model API is configured.")
+            else:
+                self.mda_api_available = False
+                logger.warning("⚠️ HF_MDA_API_URL not set. Using sample data fallback for MDA analysis.")
+
             logger.info("✅ EnhancedPositionTradingSystem initialized successfully")
 
         except Exception as e:
             logger.error(f"❌ Error initializing EnhancedPositionTradingSystem: {e}")
             raise
 
+    # ==============================================================================
+    #  NEW: API CALLING HELPER METHODS
+    # ==============================================================================
 
+    def _analyze_sentiment_via_api(self, articles: list) -> tuple[list, list] | None:
+        """Analyzes news sentiment by calling the remote SBERT Hugging Face API."""
+        try:
+            payload = {"inputs": articles}
+            api_results = query_hf_api(self.sentiment_api_url, payload)
 
+            if api_results is None:
+                raise ValueError("API call to SBERT HF Space failed or returned no data.")
 
+            if isinstance(api_results, list) and len(api_results) > 0 and isinstance(api_results[0], list):
+                api_results = api_results[0]
 
+            sentiments = [res.get('label', 'neutral').lower() for res in api_results]
+            confidences = [res.get('score', 0.5) for res in api_results]
+            return sentiments, confidences
+        except (ValueError, TypeError, IndexError, AttributeError) as e:
+            logging.error(f"Could not parse SBERT API response. Error: {e}. Response: {api_results}")
+            return None
+
+    def _analyze_mda_via_api(self, mda_texts: list) -> dict | None:
+        """Analyzes MDA text by calling the remote MDA Hugging Face API."""
+        try:
+            payload = {"inputs": mda_texts}
+            api_results = query_hf_api(self.mda_api_url, payload)
+
+            if api_results is None:
+                raise ValueError("API call to MDA HF Space failed or returned no data.")
+
+            # This logic assumes your API returns a list of sentiment dictionaries.
+            # You must adapt this to your actual API output format.
+            sentiments = [res.get('label') for res in api_results]
+            confidences = [res.get('score') for res in api_results]
+
+            sentiment_scores = []
+            for sentiment, confidence in zip(sentiments, confidences):
+                if str(sentiment).lower() in ['positive', 'very_positive', 'label_4', 'label_3']:
+                    sentiment_scores.append(confidence)
+                elif str(sentiment).lower() in ['negative', 'very_negative', 'label_0', 'label_1']:
+                    sentiment_scores.append(-confidence)
+                else:
+                    sentiment_scores.append(0)
+
+            avg_sentiment = np.mean(sentiment_scores) if sentiment_scores else 0
+            mda_score = 50 + (avg_sentiment * 50)
+            mda_score = max(0, min(100, mda_score))
+
+            management_tone = "Neutral"
+            if mda_score >= 70:
+                management_tone = "Very Optimistic"
+            elif mda_score >= 60:
+                management_tone = "Optimistic"
+            elif mda_score <= 40:
+                management_tone = "Pessimistic"
+
+            return {
+                'mda_score': mda_score,
+                'management_tone': management_tone,
+                'confidence': np.mean(confidences) if confidences else 0,
+                'analysis_method': 'Remote PyTorch BERT MDA Model (API)',
+            }
+        except (ValueError, TypeError, IndexError, AttributeError) as e:
+            logging.error(f"Could not parse MDA API response. Error: {e}. Response: {api_results}")
+            return None
     def _validate_trading_params(self):
         """Validate position trading parameters"""
         try:
@@ -601,97 +654,30 @@ class EnhancedPositionTradingSystem:
 
     # Update the analyze_mda_sentiment method in your main class
     def updated_analyze_mda_sentiment(self, symbol):
-        """
-        Updated analyze_mda_sentiment method that prioritizes real MD&A extraction
-        """
+        """Updated to prioritize API calls for real MD&A extraction and analysis."""
         try:
-            if not self.mda_available:
-                logger.info("MDA model not available, using sample analysis")
+            if not self.mda_api_available:
+                logger.warning("MDA API URL not configured. Using sample analysis as fallback.")
                 return self.get_sample_mda_analysis(symbol)
 
-            # ✅ Step 1: Try to fetch real MD&A text using improved extractor
-            try:
-                extractor = self.ImprovedMDAExtractor()
-                mda_texts = extractor.get_mda_text(symbol, max_reports=3)
+            extractor = self.ImprovedMDAExtractor()
+            mda_texts = extractor.get_mda_text(symbol, max_reports=3)
 
-                if mda_texts:
-                    logger.info(f"Successfully extracted {len(mda_texts)} real MD&A texts for {symbol}")
-                else:
-                    logger.warning(f"No real MD&A text found for {symbol}")
-
-            except Exception as e:
-                logger.warning(f"Failed to extract real MDA text for {symbol}: {e}")
-                mda_texts = []
-
-            # ✅ Step 2: If no real text found, try alternative sources
             if not mda_texts:
-                logger.info(f"Trying alternative sources for {symbol}")
-                try:
-                    # Try getting recent earnings transcripts or management commentary
-                    alternative_texts = self._get_alternative_management_content(symbol)
-                    if alternative_texts:
-                        mda_texts = alternative_texts
-                        logger.info(f"Found {len(mda_texts)} alternative management texts for {symbol}")
-                except Exception as e:
-                    logger.warning(f"Alternative content extraction failed: {e}")
-
-            # ✅ Step 3: If still no real text, use sample but log it clearly
-            if not mda_texts:
-                logger.warning(f"No real MDA text found for {symbol}, using sample analysis")
+                logger.warning(f"No real MDA text found for {symbol}, using sample analysis.")
                 return self.get_sample_mda_analysis(symbol)
 
-            # ✅ Step 4: Run your MDA sentiment model on real text
-            try:
-                sentiments, confidences = self.mda_sentiment_model.predict(mda_texts)
+            logger.info(f"Sending {len(mda_texts)} MD&A texts to the API for analysis.")
+            api_result = self._analyze_mda_via_api(mda_texts)
 
-                if not sentiments or not confidences:
-                    logger.warning(f"MDA sentiment analysis failed for {symbol}")
-                    return self.get_sample_mda_analysis(symbol)
+            if api_result:
+                return api_result
 
-            except Exception as e:
-                logger.error(f"MDA model prediction failed for {symbol}: {e}")
-                return self.get_sample_mda_analysis(symbol)
-
-            # ✅ Step 5: Convert sentiment to scores
-            sentiment_scores = []
-            for sentiment, confidence in zip(sentiments, confidences):
-                if sentiment in ['positive', 'very_positive']:
-                    sentiment_scores.append(confidence)
-                elif sentiment in ['negative', 'very_negative']:
-                    sentiment_scores.append(-confidence)
-                else:
-                    sentiment_scores.append(0)
-
-            avg_sentiment = np.mean(sentiment_scores) if sentiment_scores else 0
-            mda_score = 50 + (avg_sentiment * 50)  # scale to 0–100
-            mda_score = max(0, min(100, mda_score))
-
-            # Helper to get tone label
-            management_tone = "Neutral"
-            if mda_score >= 70:
-                management_tone = "Very Optimistic"
-            elif mda_score >= 60:
-                management_tone = "Optimistic"
-            elif mda_score <= 40:
-                management_tone = "Pessimistic"
-
-            return {
-                'mda_score': mda_score,
-                'sentiment_distribution': {
-                    'positive': sentiments.count('positive') / len(sentiments) if sentiments else 0,
-                    'negative': sentiments.count('negative') / len(sentiments) if sentiments else 0,
-                    'neutral': sentiments.count('neutral') / len(sentiments) if sentiments else 0,
-                },
-                'management_tone': management_tone,
-                'confidence': np.mean(confidences) if confidences else 0,
-                'analysis_method': 'PyTorch BERT MDA Model (REAL TEXT)',
-                'sample_texts_analyzed': len(mda_texts),
-                'text_sources': 'Real MD&A extraction successful'
-            }
+            logger.warning(f"MDA API call failed for {symbol}. Using sample analysis as fallback.")
+            return self.get_sample_mda_analysis(symbol)
 
         except Exception as e:
-            logger.error(f"Error in MDA sentiment analysis for {symbol}: {str(e)}")
-            logger.error(traceback.format_exc())
+            logger.error(f"An unexpected error in MDA sentiment analysis for {symbol}: {e}")
             return self.get_sample_mda_analysis(symbol)
 
     def _get_alternative_management_content(self, symbol):
@@ -1112,100 +1098,7 @@ class EnhancedPositionTradingSystem:
             }
             logger.warning(f"Using fallback database with {len(self.indian_stocks)} stocks")
 
-    def load_trained_sbert_model(self, model_path):
-        """
-        Loads the trained SBERT-based sentiment analysis model.
-        Supports both sklearn Pipeline and dictionary-based model formats.
-        """
-        try:
-            logger.info(f"Loading trained SBERT sentiment model from {model_path}...")
-            obj = joblib.load(model_path)
-
-            # ✅ Handle sklearn Pipeline
-            if hasattr(obj, "predict"):
-                self.sentiment_pipeline = obj
-                logger.info("✅ Loaded full sklearn pipeline successfully.")
-                return
-
-            # ✅ Handle dictionary-based format (your case)
-            if isinstance(obj, dict):
-                self.vectorizer = obj.get("vectorizer")
-                # Accept both 'classifier' and 'model' keys for backward compatibility
-                self.classifier = obj.get("classifier") or obj.get("model")
-                self.label_encoder = obj.get("label_encoder")
-
-                # Build pipeline manually if components exist
-                if self.vectorizer and self.classifier:
-                    from sklearn.pipeline import Pipeline
-                    self.sentiment_pipeline = Pipeline([
-                        ("vectorizer", self.vectorizer),
-                        ("classifier", self.classifier)
-                    ])
-                    logger.info("✅ Loaded model components from a dictionary file.")
-                    logger.info(
-                        f"✅ Loaded SBERT model components: "
-                        f"Vectorizer={'Yes' if self.vectorizer else 'No'}, "
-                        f"Classifier={'Yes' if self.classifier else 'No'}, "
-                        f"LabelEncoder={'Yes' if self.label_encoder else 'No'}"
-                    )
-                else:
-                    logger.warning("⚠️ Model dictionary missing vectorizer or classifier.")
-                    self.sentiment_pipeline = None
-            else:
-                raise ValueError("Unrecognized model format.")
-
-            if self.sentiment_pipeline is None:
-                raise RuntimeError("Sentiment pipeline is None after loading.")
-
-            logger.info("SBERT sentiment model loaded successfully!")
-
-            # ✅ Optional sanity check
-            try:
-                _ = self.sentiment_pipeline.named_steps["vectorizer"]
-            except Exception:
-                logger.warning("⚠️ Model forward method not found, skipping legacy check.")
-
-        except Exception as e:
-            logger.error(f"Error loading SBERT model: {e}")
-            logger.error(traceback.format_exc())
-            self.sentiment_pipeline = None
-            logger.info("Using TextBlob as fallback for sentiment analysis")
-
-    def analyze_sentiment_with_trained_sbert(self, articles):
-        """Analyze sentiment using your trained SBERT model"""
-        try:
-            if not articles or not self.model_loaded:
-                return self.analyze_sentiment_with_textblob(articles)
-
-            # Use the full pipeline if it was loaded
-            if hasattr(self, 'sentiment_pipeline'):
-                sentiment_labels = self.sentiment_pipeline.predict(articles)
-                probabilities = self.sentiment_pipeline.predict_proba(articles)
-                confidence_scores = np.max(probabilities, axis=1)
-                return sentiment_labels.tolist(), confidence_scores.tolist()
-
-            # --- FIX: Use the individual components if they were loaded from a dictionary ---
-            elif hasattr(self, 'vectorizer') and hasattr(self, 'model'):
-                embeddings = self.vectorizer.transform(articles)
-                if embeddings is None or len(embeddings) == 0:
-                    logger.error("Failed to generate embeddings")
-                    return self.analyze_sentiment_with_textblob(articles)
-
-                # The model's predict() method already returns the final labels (e.g., 'positive')
-                sentiment_labels = self.model.predict(embeddings)
-                probabilities = self.model.predict_proba(embeddings)
-                confidence_scores = np.max(probabilities, axis=1)
-
-                return sentiment_labels.tolist(), confidence_scores.tolist()
-
-            # If no valid model is loaded, fallback
-            else:
-                logger.warning("SBERT model not properly loaded. Falling back to TextBlob.")
-                return self.analyze_sentiment_with_textblob(articles)
-
-        except Exception as e:
-            logger.error(f"Error in trained SBERT sentiment analysis: {str(e)}")
-            return self.analyze_sentiment_with_textblob(articles)
+    
 
     def get_indian_stock_data(self, symbol, period="5y"):
         """Get Indian stock data with extended period for position trading"""
@@ -2038,29 +1931,25 @@ class EnhancedPositionTradingSystem:
 
     # News sentiment methods
     def analyze_news_sentiment(self, symbol, num_articles=20):
-        """Analyze news sentiment using your trained SBERT model"""
+        """Main sentiment analysis function updated to use the API."""
         try:
-            articles = self.fetch_indian_news(symbol, num_articles)
+            articles = self.fetch_indian_news(symbol, num_articles) or self.get_sample_news(symbol)
             news_source = "Real news (NewsAPI)" if articles else "Sample news"
 
             if not articles:
-                articles = self.get_sample_news(symbol)
-
-            if not articles:
-                logger.error(f"No articles available for {symbol}")
                 return [], [], [], "No Analysis", "No Source"
 
-            if self.model_loaded and self.sentiment_pipeline:
-                sentiments, confidences = self.analyze_sentiment_with_trained_sbert(articles)
-                analysis_method = f"Trained SBERT Model ({self.model_type})"
-            else:
-                sentiments, confidences = self.analyze_sentiment_with_textblob(articles)
-                analysis_method = "TextBlob Fallback"
+            if self.sentiment_api_available:
+                api_result = self._analyze_sentiment_via_api(articles)
+                if api_result:
+                    sentiments, confidences = api_result
+                    return sentiments, articles, confidences, "SBERT API", news_source
 
-            return sentiments, articles, confidences, analysis_method, news_source
-
+            logging.warning(f"Falling back to TextBlob for news sentiment for {symbol}.")
+            sentiments, confidences = self.analyze_sentiment_with_textblob(articles)
+            return sentiments, articles, confidences, "TextBlob Fallback", news_source
         except Exception as e:
-            logger.error(f"Error in news sentiment analysis for {symbol}: {str(e)}")
+            logging.error(f"Error in news sentiment analysis for {symbol}: {e}")
             return [], [], [], "Error", "Error"
 
     def analyze_sentiment_with_textblob(self, articles):
@@ -2366,6 +2255,7 @@ class EnhancedPositionTradingSystem:
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger: logging.Logger = logging.getLogger(__name__)
+
 
 
 
