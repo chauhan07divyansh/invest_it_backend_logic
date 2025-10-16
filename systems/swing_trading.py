@@ -1,12 +1,12 @@
-import os, logging, traceback
+import os, logging, traceback, warnings
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 import joblib, numpy as np, pandas as pd, requests, yfinance as yf
 from textblob import TextBlob
 from colorama import Fore, Style
-import warnings
 import config
 from .common_classes import SBERTTransformer, SBERT_AVAILABLE
+from hf_utils import download_model_from_hf
 
 warnings.filterwarnings('ignore')
 logger = logging.getLogger(__name__)
@@ -17,13 +17,32 @@ class EnhancedSwingTradingSystem:
             self.news_api_key = config.NEWS_API_KEY
             self.swing_trading_params = config.SWING_TRADING_PARAMS
             self.sentiment_pipeline, self.model_loaded, self.model_type = None, False, "None"
+
+            # --- Validate Trading Parameters ---
             self._validate_trading_params()
-            self.load_sbert_model(config.SBERT_MODEL_PATH)
+
+            # --- Handle SBERT Sentiment Model ---
+            sbert_model_path = getattr(config, "SBERT_MODEL_PATH", None)
+            if sbert_model_path:
+                if sbert_model_path.startswith("http"):
+                    logger.info("Downloading SBERT model from Hugging Face Hub...")
+                    sbert_model_path = download_model_from_hf(
+                        "Brosoverhoes07/financial-model",
+                        os.path.basename(sbert_model_path)
+                    )
+                self.load_sbert_model(sbert_model_path)
+            else:
+                logger.warning("⚠️ SBERT model path not configured.")
+
+            # --- Initialize stock universe ---
             self.initialize_stock_database()
-            logger.info("EnhancedSwingTradingSystem initialized successfully")
+            logger.info("✅ EnhancedSwingTradingSystem initialized successfully")
+
         except Exception as e:
-            logger.error(f"Error initializing EnhancedSwingTradingSystem: {e}")
+            logger.error(f"❌ Error initializing EnhancedSwingTradingSystem: {e}")
+            traceback.print_exc()
             raise
+
 
     def _validate_trading_params(self):
         """Validate trading parameters"""
@@ -1659,6 +1678,7 @@ class EnhancedSwingTradingSystem:
         except Exception as e:
             logger.error(f"Error printing analysis summary: {str(e)}")
             print(f"Error generating analysis summary: {str(e)}")
+
 
 
 
