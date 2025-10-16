@@ -1,29 +1,36 @@
 import os
+from dotenv import load_dotenv
 
-# === BASE SETTINGS ===
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# Load environment variables from a .env file for local development.
+# On Render, these variables will be set directly in the dashboard.
+load_dotenv()
 
-# === API KEYS ===
-NEWS_API_KEY = os.getenv("NEWS_API_KEY", "dd33ebe105ea4b02a3b7e77bc4a93d01")
-HF_API_KEY = os.getenv("HF_API_KEY")  # Set this in Render dashboard (Environment → Add Variable)
+# ==============================================================================
+#  API KEYS & SECRETS
+# ==============================================================================
+# These MUST be set as environment variables in your Render dashboard.
+# DO NOT hardcode secret keys in your code.
 
-# === HUGGING FACE MODEL ENDPOINTS ===
-HF_SBERT_MODEL_URL = os.getenv(
-    "HF_SBERT_MODEL_URL",
-    "https://huggingface.co/Brosoverhoes07/financial-model/resolve/main/sentiment_pipeline_chunking.joblib"
-)
+NEWS_API_KEY = os.getenv("NEWS_API_KEY")
+HF_API_KEY = os.getenv("HF_API_KEY")  # Your Hugging Face User Access Token (read or write)
 
-HF_MDA_MODEL_URL = os.getenv(
-    "HF_MDA_MODEL_URL",
-    "https://huggingface.co/Brosoverhoes07/financial-model/resolve/main/best_model_fold_1.pth"
-)
-from hf_utils import download_model_from_hf
 
-# === MODEL DOWNLOAD FROM HUGGING FACE ===
-SBERT_MODEL_PATH = download_model_from_hf("Brosoverhoes07/financial-model", "sentiment_pipeline_chunking.joblib")
-MDA_MODEL_PATH = download_model_from_hf("Brosoverhoes07/financial-model", "best_model_fold_1.pth")
+# ==============================================================================
+#  HUGGING FACE API ENDPOINTS
+# ==============================================================================
+# These are the URLs for your deployed Hugging Face Spaces.
+# You can find these URLs under the "Use via API" section on each Space page.
+# These MUST be set as environment variables in your Render dashboard.
 
-# === TRADING PARAMETERS ===
+HF_SENTIMENT_API_URL = os.getenv("HF_SENTIMENT_API_URL")
+HF_MDA_API_URL = os.getenv("HF_MDA_API_URL")
+
+
+# ==============================================================================
+#  TRADING LOGIC PARAMETERS
+# ==============================================================================
+# These values configure the core behavior of your trading algorithms.
+
 POSITION_TRADING_PARAMS = {
     'min_holding_period': 90,
     'max_holding_period': 1095,
@@ -44,6 +51,9 @@ SWING_TRADING_PARAMS = {
     'max_portfolio_risk': 0.10,
     'profit_target_multiplier': 2.5,
 }
+
+# IMPORTANT: All model download logic has been removed. This file now only
+# declares configuration variables to be read from the environment.
 
 
 
