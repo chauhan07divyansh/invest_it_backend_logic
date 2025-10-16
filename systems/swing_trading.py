@@ -6,7 +6,6 @@ from textblob import TextBlob
 from colorama import Fore, Style
 import config
 from .common_classes import SBERTTransformer, SBERT_AVAILABLE
-from hf_utils import download_model_from_hf
 from hf_utils import query_hf_api
 warnings.filterwarnings('ignore')
 logger = logging.getLogger(__name__)
@@ -1686,6 +1685,7 @@ class EnhancedSwingTradingSystem:
         except Exception as e:
             logger.error(f"Error printing analysis summary: {str(e)}")
             print(f"Error generating analysis summary: {str(e)}")
+
 
 
 
