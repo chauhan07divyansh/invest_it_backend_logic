@@ -42,5 +42,9 @@ SWING_TRADING_PARAMS = {
     'max_portfolio_risk': 0.10,
     'profit_target_multiplier': 2.5,
 }
+# === BACKWARD COMPATIBILITY FOR LOCAL PATH VARIABLES ===
+SBERT_MODEL_PATH = HF_SBERT_MODEL_URL
+MDA_MODEL_PATH = HF_MDA_MODEL_URL
+
 
 
