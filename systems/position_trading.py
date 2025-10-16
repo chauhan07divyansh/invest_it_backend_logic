@@ -12,7 +12,6 @@ from transformers import AutoTokenizer, AutoModel
 import warnings
 import config
 from .common_classes import SBERTTransformer, MDASentimentModel, SBERT_AVAILABLE
-from hf_utils import download_model_from_hf
 
 warnings.filterwarnings('ignore')
 logger = logging.getLogger(__name__)
@@ -24,43 +23,15 @@ class EnhancedPositionTradingSystem:
             self.position_trading_params = config.POSITION_TRADING_PARAMS
             self.model_loaded, self.mda_available = False, False
             self.model_type, self.mda_sentiment_model = "None", None
-
-            # --- Handle MDA Model (PyTorch) ---
-            mda_model_path = getattr(config, "MDA_MODEL_PATH", None)
-            if mda_model_path:
-                if mda_model_path.startswith("http"):
-                    logger.info("Downloading MDA model from Hugging Face Hub...")
-                    mda_model_path = download_model_from_hf(
-                        "Brosoverhoes07/financial-model",
-                        os.path.basename(mda_model_path)
-                    )
-                if os.path.exists(mda_model_path):
-                    self.mda_sentiment_model = MDASentimentModel(mda_model_path)
-                    self.mda_available = self.mda_sentiment_model.is_available()
-                    logger.info("✅ MDA sentiment model loaded successfully.")
-                else:
-                    logger.warning("⚠️ MDA model file not found — continuing without it.")
-
-            # --- Handle SBERT Sentiment Model ---
-            sbert_model_path = getattr(config, "SBERT_MODEL_PATH", None)
-            if sbert_model_path:
-                if sbert_model_path.startswith("http"):
-                    logger.info("Downloading SBERT model from Hugging Face Hub...")
-                    sbert_model_path = download_model_from_hf(
-                        "Brosoverhoes07/financial-model",
-                        os.path.basename(sbert_model_path)
-                    )
-                self.load_trained_sbert_model(sbert_model_path)
-            else:
-                logger.warning("⚠️ SBERT model path not configured.")
-
-            # --- Finish setup ---
+            if config.MDA_MODEL_PATH and os.path.exists(config.MDA_MODEL_PATH):
+                self.mda_sentiment_model = MDASentimentModel(config.MDA_MODEL_PATH)
+                self.mda_available = self.mda_sentiment_model.is_available()
             self._validate_trading_params()
+            self.load_trained_sbert_model(config.SBERT_MODEL_PATH)
             self.initialize_stock_database()
-            logger.info("✅ EnhancedPositionTradingSystem initialized successfully")
-
+            logger.info("EnhancedPositionTradingSystem initialized successfully")
         except Exception as e:
-            logger.error(f"❌ Error initializing EnhancedPositionTradingSystem: {e}")
+            logger.error(f"Error initializing EnhancedPositionTradingSystem: {e}")
             raise
 
 
@@ -2362,4 +2333,5 @@ class EnhancedPositionTradingSystem:
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger: logging.Logger = logging.getLogger(__name__)
+
 
