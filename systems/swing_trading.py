@@ -1,14 +1,22 @@
-import os, logging, traceback, warnings
+import os
+import logging
+import traceback
+import warnings
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
-import joblib, numpy as np, pandas as pd, requests, yfinance as yf
+from typing import Dict, List
+
+import numpy as np
+import pandas as pd
+import requests  # Make sure requests is imported
+import yfinance as yf
 from textblob import TextBlob
-from colorama import Fore, Style
+
 import config
-from .common_classes import SBERTTransformer, SBERT_AVAILABLE
 from hf_utils import query_hf_api
+
 warnings.filterwarnings('ignore')
 logger = logging.getLogger(__name__)
+
 
 class EnhancedSwingTradingSystem:
     def __init__(self):
@@ -19,9 +27,7 @@ class EnhancedSwingTradingSystem:
             self.initialize_stock_database()
 
             # --- API CONFIGURATION CHECK ---
-            # This replaces all the old model download and load logic.
             self.sentiment_api_url = config.HF_SENTIMENT_API_URL
-            
             if self.sentiment_api_url:
                 self.model_api_available = True
                 self.model_type = "SBERT API"
@@ -29,7 +35,13 @@ class EnhancedSwingTradingSystem:
             else:
                 self.model_api_available = False
                 self.model_type = "TextBlob"
-                logger.warning("⚠️ HF_SENTIMENT_API_URL environment variable not set. Sentiment analysis will use TextBlob as a fallback.")
+                logger.warning("⚠️ HF_SENTIMENT_API_URL not set. Using TextBlob fallback.")
+
+            # --- ADD SESSION FOR ROBUST DATA FETCHING ---
+            self.session = requests.Session()
+            self.session.headers.update({
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            })
 
             logger.info("✅ EnhancedSwingTradingSystem initialized successfully")
 
@@ -346,7 +358,7 @@ class EnhancedSwingTradingSystem:
 
 
     def get_indian_stock_data(self, symbol, period="6mo"):
-        """Get Indian stock data with extended period for swing trading and comprehensive error handling"""
+        """Get Indian stock data using a session to avoid being blocked."""
         try:
             if not symbol:
                 raise ValueError("Empty symbol provided")
@@ -355,7 +367,6 @@ class EnhancedSwingTradingSystem:
             if not symbol:
                 raise ValueError("Invalid symbol after cleaning")
 
-            # Enhanced Indian stocks mapping
             symbol_mappings = {
                 "RELIANCE": "RELIANCE.NS", "TCS": "TCS.NS", "INFY": "INFY.NS",
                 "HDFCBANK": "HDFCBANK.NS", "BAJFINANCE": "BAJFINANCE.NS",
@@ -367,7 +378,6 @@ class EnhancedSwingTradingSystem:
                 "NTPC": "NTPC.NS", "ONGC": "ONGC.NS", "ADANIENT": "ADANIENT.NS",
                 "WIPRO": "WIPRO.NS", "TECHM": "TECHM.NS", "POWERGRID": "POWERGRID.NS",
             }
-
             symbols_to_try = [f"{symbol}.NS", f"{symbol}.BO", symbol]
             if symbol in symbol_mappings:
                 symbols_to_try.insert(0, symbol_mappings[symbol])
@@ -375,42 +385,34 @@ class EnhancedSwingTradingSystem:
             for sym in symbols_to_try:
                 try:
                     logger.info(f"Trying to fetch data for {sym}")
-                    ticker = yf.Ticker(sym)
-
-                    # Add timeout and retry logic
+                    # --- THIS IS THE CRITICAL CHANGE ---
+                    ticker = yf.Ticker(sym, session=self.session)
                     data = ticker.history(period=period, timeout=30)
 
                     if data is None or data.empty:
                         logger.warning(f"No data returned for {sym}")
                         continue
-
-                    if len(data) < 30:  # Need more data for swing trading
+                    if len(data) < 30:
                         logger.warning(f"Insufficient data for {sym}: {len(data)} days")
                         continue
-
-                    # Validate data quality
                     if data['Close'].isna().all():
                         logger.warning(f"All Close prices are NaN for {sym}")
                         continue
-
-                    # Try to get info (optional, might fail for some stocks)
+                    
                     info = {}
                     try:
                         info = ticker.info
-                    except Exception as info_error:
-                        logger.warning(f"Could not fetch info for {sym}: {str(info_error)}")
-                        info = {}
+                    except Exception:
+                        pass # Info fetching is optional
 
                     logger.info(f"Successfully fetched data for {sym}: {len(data)} days")
                     return data, info, sym
-
                 except Exception as e:
                     logger.warning(f"Failed to fetch data for {sym}: {str(e)}")
                     continue
-
+            
             logger.error(f"Failed to fetch data for all variations of {symbol}")
             return None, None, None
-
         except Exception as e:
             logger.error(f"Error in get_indian_stock_data for {symbol}: {str(e)}")
             return None, None, None
@@ -765,37 +767,20 @@ class EnhancedSwingTradingSystem:
 
 
     def _analyze_sentiment_via_api(self, articles: list) -> tuple[list, list] | None:
-        """
-        Analyzes sentiment by calling the remote Hugging Face API endpoint.
-        This is a private helper method.
-        """
+        """Analyzes sentiment by calling the remote SBERT Hugging Face API."""
         try:
-            # Structure the payload as required by most HF Inference APIs
             payload = {"inputs": articles}
-            
-            # Use the utility function to make the API call
             api_results = query_hf_api(self.sentiment_api_url, payload)
-
             if api_results is None:
-                raise ValueError("API call to Hugging Face failed or returned no data.")
-
-            # IMPORTANT: This parsing logic assumes your API returns a list of dictionaries,
-            # like: [{'label': 'positive', 'score': 0.98}, ...].
-            # You may need to adjust this based on your specific model's output.
-            
-            # Handle cases where the API might wrap the result in an extra list
+                raise ValueError("API call to SBERT HF Space failed or returned no data.")
             if isinstance(api_results, list) and len(api_results) > 0 and isinstance(api_results[0], list):
                 api_results = api_results[0]
-
             sentiments = [res.get('label', 'neutral').lower() for res in api_results]
             confidences = [res.get('score', 0.5) for res in api_results]
-            
             return sentiments, confidences
-            
         except (ValueError, TypeError, IndexError, AttributeError) as e:
-            logging.error(f"Could not parse API response. Error: {e}. Response received: {api_results}")
+            logging.error(f"Could not parse SBERT API response. Error: {e}. Response: {api_results}")
             return None
-
 
     def analyze_sentiment_with_textblob(self, articles):
         """Fallback sentiment analysis using TextBlob with error handling"""
@@ -833,36 +818,22 @@ class EnhancedSwingTradingSystem:
 
 
     def analyze_news_sentiment(self, symbol, num_articles=15):
-        """
-        Main sentiment analysis function updated to use the API.
-        It orchestrates fetching news and calling the appropriate analysis method.
-        """
+        """Main sentiment analysis function updated to use the API."""
         try:
-            articles = self.fetch_indian_news(symbol, num_articles)
+            articles = self.fetch_indian_news(symbol, num_articles) or self.get_sample_news(symbol)
             news_source = "Real news (NewsAPI)" if articles else "Sample news"
-
             if not articles:
-                articles = self.get_sample_news(symbol)
-
-            if not articles:
-                logger.error(f"No articles available for {symbol}")
                 return [], [], [], "No Analysis", "No Source"
 
-            # --- CORE LOGIC UPDATE ---
-            # 1. Try to use the API first if it's configured
             if self.model_api_available:
                 api_result = self._analyze_sentiment_via_api(articles)
                 if api_result:
                     sentiments, confidences = api_result
-                    analysis_method = "SBERT API"
-                    return sentiments, articles, confidences, analysis_method, news_source
-
-            # 2. If the API is not available or the call failed, fall back to TextBlob
-            logger.warning(f"Falling back to TextBlob for {symbol}.")
+                    return sentiments, articles, confidences, "SBERT API", news_source
+            
+            logging.warning(f"Falling back to TextBlob for news sentiment for {symbol}.")
             sentiments, confidences = self.analyze_sentiment_with_textblob(articles)
-            analysis_method = "TextBlob Fallback"
-            return sentiments, articles, confidences, analysis_method, news_source
-
+            return sentiments, articles, confidences, "TextBlob Fallback", news_source
         except Exception as e:
             logger.error(f"Error in news sentiment analysis for {symbol}: {e}")
             return [], [], [], "Error", "Error"
@@ -1685,6 +1656,7 @@ class EnhancedSwingTradingSystem:
         except Exception as e:
             logger.error(f"Error printing analysis summary: {str(e)}")
             print(f"Error generating analysis summary: {str(e)}")
+
 
 
 
