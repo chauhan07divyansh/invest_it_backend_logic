@@ -32,12 +32,3 @@ transformers==4.44.2
 sentence-transformers==3.0.1
 huggingface-hub==0.24.6
 textblob==0.17.1
-alpha-vantage==2.3.1
-
-
-
-
-
-
-
-
