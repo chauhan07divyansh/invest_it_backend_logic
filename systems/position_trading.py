@@ -2,7 +2,6 @@ import os
 import re
 import time
 import logging
-import traceback
 from datetime import datetime
 from typing import Dict, List, Optional
 
@@ -16,7 +15,7 @@ import requests
 
 # Local application imports
 import config
-from hf_utils import query_hf_api  # Use the new API utility
+from hf_utils import query_hf_api
 
 warnings.filterwarnings('ignore')
 logger = logging.getLogger(__name__)
@@ -30,32 +29,20 @@ class EnhancedPositionTradingSystem:
             self._validate_trading_params()
             self.initialize_stock_database()
 
-            # --- API CONFIGURATION CHECK FOR SBERT (NEWS SENTIMENT) ---
+            # --- API CONFIGURATION CHECKS ---
             self.sentiment_api_url = config.HF_SENTIMENT_API_URL
-            if self.sentiment_api_url:
-                self.sentiment_api_available = True
-                self.model_type = "SBERT API"
-                logger.info("✅ SBERT Sentiment Model API is configured.")
-            else:
-                self.sentiment_api_available = False
-                self.model_type = "TextBlob"
-                logger.warning("⚠️ HF_SENTIMENT_API_URL not set. Using TextBlob fallback for news sentiment.")
-
-            # --- API CONFIGURATION CHECK FOR MDA (MANAGEMENT TONE) ---
+            self.sentiment_api_available = bool(self.sentiment_api_url)
+            self.model_type = "SBERT API" if self.sentiment_api_available else "TextBlob"
+            
             self.mda_api_url = config.HF_MDA_API_URL
-            if self.mda_api_url:
-                self.mda_api_available = True
-                logger.info("✅ MDA Sentiment Model API is configured.")
-            else:
-                self.mda_api_available = False
-                logger.warning("⚠️ HF_MDA_API_URL not set. Using sample data fallback for MDA analysis.")
+            self.mda_api_available = bool(self.mda_api_url)
 
-            # --- ADD SESSION FOR ROBUST DATA FETCHING ---
+            # --- Session for robust yfinance data fetching ---
             self.session = requests.Session()
             self.session.headers.update({
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
             })
-
+            
             logger.info("✅ EnhancedPositionTradingSystem initialized successfully")
 
         except Exception as e:
@@ -82,7 +69,7 @@ class EnhancedPositionTradingSystem:
             confidences = [res.get('score', 0.5) for res in api_results]
             return sentiments, confidences
         except (ValueError, TypeError, IndexError, AttributeError) as e:
-            logging.error(f"Could not parse SBERT API response. Error: {e}. Response: {api_results}")
+            logging.error(f"Could not parse SBERT API response. Error: {e}. Response: {api_results if 'api_results' in locals() else 'unknown'}")
             return None
 
     def _analyze_mda_via_api(self, mda_texts: list) -> dict | None:
@@ -1158,60 +1145,45 @@ class EnhancedPositionTradingSystem:
     
 
     def get_indian_stock_data(self, symbol, period="5y"):
-        """Get Indian stock data using a session to avoid being blocked."""
+        """Fetches stock data using yfinance with a session and retry logic."""
         try:
             if not symbol:
                 raise ValueError("Empty symbol provided")
             symbol = str(symbol).upper().replace(" ", "").replace(".", "")
-            if not symbol:
-                raise ValueError("Invalid symbol after cleaning")
-
-            symbol_mappings = {
-                "RELIANCE": "RELIANCE.NS", "TCS": "TCS.NS", "INFY": "INFY.NS",
-                "HDFCBANK": "HDFCBANK.NS", "BAJFINANCE": "BAJFINANCE.NS",
-                "HINDUNILVR": "HINDUNILVR.NS", "ICICIBANK": "ICICIBANK.NS",
-                "KOTAKBANK": "KOTAKBANK.NS", "SBIN": "SBIN.NS",
-                "BHARTIARTL": "BHARTIARTL.NS", "LT": "LT.NS", "MARUTI": "MARUTI.NS",
-                "ASIANPAINT": "ASIANPAINT.NS", "HCLTECH": "HCLTECH.NS",
-                "TITAN": "TITAN.NS", "SUNPHARMA": "SUNPHARMA.NS",
-                "NTPC": "NTPC.NS", "ONGC": "ONGC.NS", "ADANIENT": "ADANIENT.NS",
-                "WIPRO": "WIPRO.NS", "TECHM": "TECHM.NS", "POWERGRID": "POWERGRID.NS",
-                "ITC": "ITC.NS", "TATAMOTORS": "TATAMOTORS.NS",
-            }
-            symbols_to_try = [f"{symbol}.NS", f"{symbol}.BO", symbol]
-            if symbol in symbol_mappings:
-                symbols_to_try.insert(0, symbol_mappings[symbol])
+            
+            symbols_to_try = [f"{symbol}.NS", f"{symbol}.BO"]
 
             for sym in symbols_to_try:
-                try:
-                    logger.info(f"Trying to fetch data for {sym}")
-                    # --- THIS IS THE CRITICAL CHANGE ---
-                    ticker = yf.Ticker(sym, session=self.session)
-                    data = ticker.history(period=period, timeout=30)
+                for attempt in range(3): # Try up to 3 times
+                    try:
+                        logger.info(f"Attempt {attempt + 1} to fetch data for {sym}")
+                        
+                        ticker = yf.Ticker(sym, session=self.session)
+                        data = ticker.history(period=period, timeout=10)
 
-                    if data is None or data.empty or len(data) < 252:
-                        logger.warning(f"No/insufficient data for {sym}")
-                        continue
-                    if data['Close'].isna().all():
-                        logger.warning(f"All Close prices are NaN for {sym}")
-                        continue
-                    
-                    info = {}
-                    try: 
-                        info = ticker.info
-                    except Exception:
-                        pass
-                    
-                    logger.info(f"Successfully fetched data for {sym}: {len(data)} days")
-                    return data, info, sym
-                except Exception as e:
-                    logger.warning(f"Failed to fetch data for {sym}: {str(e)}")
-                    continue
+                        # Adjusted length check for position trading (at least 1 year of data)
+                        if data is not None and not data.empty and len(data) >= 252:
+                            if not data['Close'].isna().all():
+                                info = {}
+                                try:
+                                    info = ticker.info
+                                except Exception:
+                                    pass # Info is optional
+                                logger.info(f"Successfully fetched data for {sym}")
+                                return data, info, sym
+                        
+                        logger.warning(f"No valid/sufficient data for {sym} on attempt {attempt + 1}")
+                        time.sleep(1) # Wait 1 second before retrying
+
+                    except Exception as e:
+                        logger.warning(f"Failed to fetch data for {sym} on attempt {attempt + 1}: {e}")
+                        time.sleep(1) # Wait before retrying
             
-            logger.error(f"Failed to fetch data for all variations of {symbol}")
+            logger.error(f"Failed to fetch data for all variations of {symbol} after multiple attempts.")
             return None, None, None
+
         except Exception as e:
-            logger.error(f"Error in get_indian_stock_data for {symbol}: {str(e)}")
+            logger.error(f"Critical error in get_indian_stock_data for {symbol}: {e}")
             return None, None, None
 
     def analyze_fundamental_metrics(self, symbol, info):
@@ -2298,6 +2270,7 @@ class EnhancedPositionTradingSystem:
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger: logging.Logger = logging.getLogger(__name__)
+
 
 
 
