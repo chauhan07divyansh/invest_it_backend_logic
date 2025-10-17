@@ -1188,7 +1188,11 @@ class EnhancedPositionTradingSystem:
                  return None, None, None
 
             # Get company info as a fallback
-            info = {'shortName': self.get_stock_info_from_db(symbol).get('name', symbol)}
+            info = {}
+            try:
+                info = yf.Ticker(f"{symbol}.NS").info
+            except Exception:
+                info = {'shortName': self.get_stock_info_from_db(symbol).get('name', symbol)}
                                 
             logger.info(f"Successfully fetched {len(data)} days of data for {api_symbol}")
             return data, info, api_symbol
@@ -2281,6 +2285,7 @@ class EnhancedPositionTradingSystem:
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger: logging.Logger = logging.getLogger(__name__)
+
 
 
 
