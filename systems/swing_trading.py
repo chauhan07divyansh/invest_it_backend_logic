@@ -7,8 +7,8 @@ from typing import Dict, List
 import numpy as np
 import pandas as pd
 from textblob import TextBlob
-from twelvedata import TDClient # Import the new library
-import yfinance as yf # Keep for fetching company .info
+from eodhd import EODHDAPIWrapper # Import the new library
+import yfinance as yf # Keep for fetching company .info as a fallback
 
 import config
 from hf_utils import query_hf_api
@@ -30,11 +30,10 @@ class EnhancedSwingTradingSystem:
             self.model_api_available = bool(self.sentiment_api_url)
             self.model_type = "SBERT API" if self.model_api_available else "TextBlob"
             
-            # --- Twelve Data Setup ---
-            self.td_api_key = os.getenv("TWELVE_DATA_API_KEY")
-            if not self.td_api_key:
-                logger.warning("⚠️ TWELVE_DATA_API_KEY not set. Data fetching will fail.")
-            self.td = TDClient(apikey=self.td_api_key)
+            # --- EODHD API Setup ---
+            self.eodhd_api_key = os.getenv("EODHD_API_KEY")
+            if not self.eodhd_api_key:
+                logger.warning("⚠️ EODHD_API_KEY not set. Data fetching will fail.")
 
             logger.info("✅ EnhancedSwingTradingSystem initialized successfully")
 
@@ -350,54 +349,49 @@ class EnhancedSwingTradingSystem:
 
 
     def get_indian_stock_data(self, symbol, period="6mo"):
-        """Fetches stock data reliably from the Twelve Data API."""
+        """Fetches stock data reliably from the EODHD API."""
         try:
-            if not symbol:
-                raise ValueError("Empty symbol provided")
+            if not self.eodhd_api_key:
+                raise ValueError("EODHD_API_KEY not set in environment.")
+            
             symbol = str(symbol).upper().replace(".NS", "").replace(".BO", "")
             
-            # Try fetching from NSE first, then BSE as a fallback
-            for exchange in ["NSE", "BSE"]:
-                api_symbol = f"{symbol}:{exchange}"
-                try:
-                    logger.info(f"Trying to fetch data for {api_symbol} from Twelve Data")
-                    
-                    ts = self.td.time_series(
-                        symbol=api_symbol,
-                        interval="1day",
-                        outputsize=200, # ~6-7 months of trading days
-                        timezone="Asia/Kolkata",
-                    )
-                    
-                    if ts is None:
-                        logger.warning(f"No data returned from Twelve Data for {api_symbol}")
-                        continue
-                        
-                    data = ts.as_pandas()
-
-                    # Data validation
-                    if data is not None and not data.empty and len(data) >= 30:
-                        data = data.rename(columns={
-                            'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'
-                        })
-                        data = data.sort_index(ascending=True) # Ensure chronological order
-                        
-                        # Use yfinance just for the .info dict, which is more reliable
-                        info = {}
-                        try:
-                            info = yf.Ticker(f"{symbol}.NS").info
-                        except Exception:
-                            info = {'shortName': self.get_stock_info_from_db(symbol).get('name', symbol)}
-                            
-                        logger.info(f"Successfully fetched {len(data)} days of data for {api_symbol}")
-                        return data, info, api_symbol
-
-                except Exception as e:
-                    logger.warning(f"Failed to fetch data for {api_symbol}: {e}")
-                    continue
+            # EODHD uses .INDX for NSE stocks
+            api_symbol = f"{symbol}.INDX" 
             
-            logger.error(f"Failed to fetch data for all variations of {symbol} from Twelve Data.")
-            return None, None, None
+            logger.info(f"Trying to fetch data for {api_symbol} from EODHD")
+            
+            eod_client = EODHDAPIWrapper(self.eodhd_api_key)
+            
+            # The API returns a list of dictionaries, which we'll convert to a DataFrame
+            resp = eod_client.get_historical_data(api_symbol, 'd') # 'd' for daily
+            
+            if not resp:
+                logger.error(f"No data returned from EODHD for {api_symbol}")
+                return None, None, None
+                
+            data = pd.DataFrame(resp).set_index('date')
+            data.index = pd.to_datetime(data.index)
+            
+            # Rename columns to match the format the rest of your code expects
+            data = data.rename(columns={
+                'open': 'Open', 'high': 'High', 'low': 'Low', 'adjusted_close': 'Close', 'volume': 'Volume'
+            })
+            
+            # Trim the full dataset to the requested period (e.g., "6mo")
+            if "mo" in period:
+                months = int(period.replace("mo", ""))
+                data = data.last(f"{months}M")
+
+            if len(data) < 30:
+                 logger.warning(f"Insufficient data for {symbol}: {len(data)} days")
+                 return None, None, None
+
+            # Get company info as a fallback
+            info = {'shortName': self.get_stock_info_from_db(symbol).get('name', symbol)}
+                                
+            logger.info(f"Successfully fetched {len(data)} days of data for {api_symbol}")
+            return data, info, api_symbol
 
         except Exception as e:
             logger.error(f"Critical error in get_indian_stock_data for {symbol}: {e}")
@@ -1642,6 +1636,7 @@ class EnhancedSwingTradingSystem:
         except Exception as e:
             logger.error(f"Error printing analysis summary: {str(e)}")
             print(f"Error generating analysis summary: {str(e)}")
+
 
 
 
