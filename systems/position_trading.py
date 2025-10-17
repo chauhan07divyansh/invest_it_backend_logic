@@ -111,7 +111,7 @@ class EnhancedPositionTradingSystem:
                 'analysis_method': 'Remote PyTorch BERT MDA Model (API)',
             }
         except (ValueError, TypeError, IndexError, AttributeError) as e:
-            logging.error(f"Could not parse MDA API response. Error: {e}. Response: {api_results}")
+            logging.error(f"Could not parse MDA API response. Error: {e}. Response: {api_results if 'api_results' in locals() else 'unknown'}")
             return None
 
     # ==============================================================================
@@ -147,8 +147,9 @@ class EnhancedPositionTradingSystem:
                 logger.warning("MDA API URL not configured. Using sample analysis as fallback.")
                 return self.get_sample_mda_analysis(symbol)
 
-            extractor = self.ImprovedMDAExtractor()
-            mda_texts = extractor.get_mda_text(symbol, max_reports=3)
+            # extractor = self.ImprovedMDAExtractor()
+            # mda_texts = extractor.get_mda_text(symbol, max_reports=3)
+            mda_texts = [] # Temporarily disable for speed, use sample data
 
             if not mda_texts:
                 logger.warning(f"No real MDA text found for {symbol}, using sample analysis.")
@@ -1145,7 +1146,9 @@ class EnhancedPositionTradingSystem:
     
 
     def get_indian_stock_data(self, symbol, period="5y"):
-        """Fetches stock data using yfinance with a session and retry logic."""
+        """
+        Fetches stock data using yfinance with a session and retry logic to prevent blocking.
+        """
         try:
             if not symbol:
                 raise ValueError("Empty symbol provided")
@@ -1158,6 +1161,8 @@ class EnhancedPositionTradingSystem:
                     try:
                         logger.info(f"Attempt {attempt + 1} to fetch data for {sym}")
                         
+                        # --- THIS IS THE CRITICAL CHANGE ---
+                        # Pass the session object to yfinance to act like a browser
                         ticker = yf.Ticker(sym, session=self.session)
                         data = ticker.history(period=period, timeout=10)
 
@@ -1166,9 +1171,10 @@ class EnhancedPositionTradingSystem:
                             if not data['Close'].isna().all():
                                 info = {}
                                 try:
+                                    # Info fetching can also fail, so it's optional
                                     info = ticker.info
                                 except Exception:
-                                    pass # Info is optional
+                                    pass 
                                 logger.info(f"Successfully fetched data for {sym}")
                                 return data, info, sym
                         
@@ -2270,6 +2276,7 @@ class EnhancedPositionTradingSystem:
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger: logging.Logger = logging.getLogger(__name__)
+
 
 
 
