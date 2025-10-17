@@ -3,13 +3,12 @@ import logging
 import warnings
 from datetime import datetime
 from typing import Dict, List
-import time
-import requests
 
 import numpy as np
 import pandas as pd
-import yfinance as yf
 from textblob import TextBlob
+from twelvedata import TDClient # Import the new library
+import yfinance as yf # Keep for fetching company .info
 
 import config
 from hf_utils import query_hf_api
@@ -31,11 +30,11 @@ class EnhancedSwingTradingSystem:
             self.model_api_available = bool(self.sentiment_api_url)
             self.model_type = "SBERT API" if self.model_api_available else "TextBlob"
             
-            # --- Session for yfinance ---
-            self.session = requests.Session()
-            self.session.headers.update({
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-            })
+            # --- Twelve Data Setup ---
+            self.td_api_key = os.getenv("TWELVE_DATA_API_KEY")
+            if not self.td_api_key:
+                logger.warning("⚠️ TWELVE_DATA_API_KEY not set. Data fetching will fail.")
+            self.td = TDClient(apikey=self.td_api_key)
 
             logger.info("✅ EnhancedSwingTradingSystem initialized successfully")
 
@@ -351,40 +350,53 @@ class EnhancedSwingTradingSystem:
 
 
     def get_indian_stock_data(self, symbol, period="6mo"):
-        """Fetches stock data using yfinance with a session and retry logic."""
+        """Fetches stock data reliably from the Twelve Data API."""
         try:
             if not symbol:
                 raise ValueError("Empty symbol provided")
-            symbol = str(symbol).upper().replace(" ", "").replace(".", "")
+            symbol = str(symbol).upper().replace(".NS", "").replace(".BO", "")
             
-            symbols_to_try = [f"{symbol}.NS", f"{symbol}.BO"]
-
-            for sym in symbols_to_try:
-                for attempt in range(3): # Try up to 3 times
-                    try:
-                        logger.info(f"Attempt {attempt + 1} to fetch data for {sym}")
+            # Try fetching from NSE first, then BSE as a fallback
+            for exchange in ["NSE", "BSE"]:
+                api_symbol = f"{symbol}:{exchange}"
+                try:
+                    logger.info(f"Trying to fetch data for {api_symbol} from Twelve Data")
+                    
+                    ts = self.td.time_series(
+                        symbol=api_symbol,
+                        interval="1day",
+                        outputsize=200, # ~6-7 months of trading days
+                        timezone="Asia/Kolkata",
+                    )
+                    
+                    if ts is None:
+                        logger.warning(f"No data returned from Twelve Data for {api_symbol}")
+                        continue
                         
-                        ticker = yf.Ticker(sym, session=self.session)
-                        data = ticker.history(period=period, timeout=10)
+                    data = ts.as_pandas()
 
-                        if data is not None and not data.empty and len(data) >= 30:
-                            if not data['Close'].isna().all():
-                                info = {}
-                                try:
-                                    info = ticker.info
-                                except Exception:
-                                    pass # Info is optional
-                                logger.info(f"Successfully fetched data for {sym}")
-                                return data, info, sym
+                    # Data validation
+                    if data is not None and not data.empty and len(data) >= 30:
+                        data = data.rename(columns={
+                            'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'
+                        })
+                        data = data.sort_index(ascending=True) # Ensure chronological order
                         
-                        logger.warning(f"No valid data returned for {sym} on attempt {attempt + 1}")
-                        time.sleep(1) # Wait 1 second before retrying
+                        # Use yfinance just for the .info dict, which is more reliable
+                        info = {}
+                        try:
+                            info = yf.Ticker(f"{symbol}.NS").info
+                        except Exception:
+                            info = {'shortName': self.get_stock_info_from_db(symbol).get('name', symbol)}
+                            
+                        logger.info(f"Successfully fetched {len(data)} days of data for {api_symbol}")
+                        return data, info, api_symbol
 
-                    except Exception as e:
-                        logger.warning(f"Failed to fetch data for {sym} on attempt {attempt + 1}: {e}")
-                        time.sleep(1) # Wait before retrying
+                except Exception as e:
+                    logger.warning(f"Failed to fetch data for {api_symbol}: {e}")
+                    continue
             
-            logger.error(f"Failed to fetch data for all variations of {symbol} after multiple attempts.")
+            logger.error(f"Failed to fetch data for all variations of {symbol} from Twelve Data.")
             return None, None, None
 
         except Exception as e:
@@ -1630,6 +1642,7 @@ class EnhancedSwingTradingSystem:
         except Exception as e:
             logger.error(f"Error printing analysis summary: {str(e)}")
             print(f"Error generating analysis summary: {str(e)}")
+
 
 
 
