@@ -1,15 +1,13 @@
 import os
 import logging
-import traceback
 import warnings
 from datetime import datetime
 from typing import Dict, List
 
 import numpy as np
 import pandas as pd
-import requests  # Make sure requests is imported
-import yfinance as yf
 from textblob import TextBlob
+from alpha_vantage.timeseries import TimeSeries # Import Alpha Vantage
 
 import config
 from hf_utils import query_hf_api
@@ -26,28 +24,23 @@ class EnhancedSwingTradingSystem:
             self._validate_trading_params()
             self.initialize_stock_database()
 
-            # --- API CONFIGURATION CHECK ---
+            # --- API CONFIGURATION CHECKS ---
             self.sentiment_api_url = config.HF_SENTIMENT_API_URL
-            if self.sentiment_api_url:
-                self.model_api_available = True
-                self.model_type = "SBERT API"
-                logger.info("✅ SBERT Sentiment Model API is configured and ready.")
-            else:
-                self.model_api_available = False
-                self.model_type = "TextBlob"
-                logger.warning("⚠️ HF_SENTIMENT_API_URL not set. Using TextBlob fallback.")
-
-            # --- ADD SESSION FOR ROBUST DATA FETCHING ---
-            self.session = requests.Session()
-            self.session.headers.update({
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-            })
+            self.model_api_available = bool(self.sentiment_api_url)
+            self.model_type = "SBERT API" if self.model_api_available else "TextBlob"
+            
+            # --- Alpha Vantage Setup ---
+            self.av_api_key = os.getenv("ALPHA_VANTAGE_API_KEY")
+            if not self.av_api_key:
+                logger.warning("⚠️ ALPHA_VANTAGE_API_KEY not set. Data fetching may fail.")
+            self.ts = TimeSeries(key=self.av_api_key, output_format='pandas')
 
             logger.info("✅ EnhancedSwingTradingSystem initialized successfully")
 
         except Exception as e:
             logger.error(f"❌ Error initializing EnhancedSwingTradingSystem: {e}")
             raise
+
 
 
     def _validate_trading_params(self):
@@ -358,63 +351,48 @@ class EnhancedSwingTradingSystem:
 
 
     def get_indian_stock_data(self, symbol, period="6mo"):
-        """Get Indian stock data using a session to avoid being blocked."""
+        """Fetches stock data reliably from Alpha Vantage API."""
         try:
             if not symbol:
                 raise ValueError("Empty symbol provided")
-
-            symbol = str(symbol).upper().replace(" ", "").replace(".", "")
-            if not symbol:
-                raise ValueError("Invalid symbol after cleaning")
-
-            symbol_mappings = {
-                "RELIANCE": "RELIANCE.NS", "TCS": "TCS.NS", "INFY": "INFY.NS",
-                "HDFCBANK": "HDFCBANK.NS", "BAJFINANCE": "BAJFINANCE.NS",
-                "HINDUNILVR": "HINDUNILVR.NS", "ICICIBANK": "ICICIBANK.NS",
-                "KOTAKBANK": "KOTAKBANK.NS", "SBIN": "SBIN.NS",
-                "BHARTIARTL": "BHARTIARTL.NS", "LT": "LT.NS", "MARUTI": "MARUTI.NS",
-                "ASIANPAINT": "ASIANPAINT.NS", "HCLTECH": "HCLTECH.NS",
-                "TITAN": "TITAN.NS", "SUNPHARMA": "SUNPHARMA.NS",
-                "NTPC": "NTPC.NS", "ONGC": "ONGC.NS", "ADANIENT": "ADANIENT.NS",
-                "WIPRO": "WIPRO.NS", "TECHM": "TECHM.NS", "POWERGRID": "POWERGRID.NS",
-            }
-            symbols_to_try = [f"{symbol}.NS", f"{symbol}.BO", symbol]
-            if symbol in symbol_mappings:
-                symbols_to_try.insert(0, symbol_mappings[symbol])
-
-            for sym in symbols_to_try:
-                try:
-                    logger.info(f"Trying to fetch data for {sym}")
-                    # --- THIS IS THE CRITICAL CHANGE ---
-                    ticker = yf.Ticker(sym, session=self.session)
-                    data = ticker.history(period=period, timeout=30)
-
-                    if data is None or data.empty:
-                        logger.warning(f"No data returned for {sym}")
-                        continue
-                    if len(data) < 30:
-                        logger.warning(f"Insufficient data for {sym}: {len(data)} days")
-                        continue
-                    if data['Close'].isna().all():
-                        logger.warning(f"All Close prices are NaN for {sym}")
-                        continue
-                    
-                    info = {}
-                    try:
-                        info = ticker.info
-                    except Exception:
-                        pass # Info fetching is optional
-
-                    logger.info(f"Successfully fetched data for {sym}: {len(data)} days")
-                    return data, info, sym
-                except Exception as e:
-                    logger.warning(f"Failed to fetch data for {sym}: {str(e)}")
-                    continue
+            symbol = str(symbol).upper().replace(".NS", "").replace(".BO", "")
             
-            logger.error(f"Failed to fetch data for all variations of {symbol}")
-            return None, None, None
+            # Alpha Vantage uses '.BSE' or '.NSE' for Indian stocks
+            api_symbol = f"{symbol}.BSE" 
+            logger.info(f"Trying to fetch data for {api_symbol} from Alpha Vantage")
+
+            # Fetch daily adjusted data
+            data, meta_data = self.ts.get_daily_adjusted(symbol=api_symbol, outputsize='full')
+            
+            if data is None or data.empty:
+                logger.warning(f"No data returned from Alpha Vantage for {api_symbol}")
+                return None, None, None
+
+            # --- Data Transformation to Match yfinance Format ---
+            data = data.rename(columns={
+                '1. open': 'Open',
+                '2. high': 'High',
+                '3. low': 'Low',
+                '4. close': 'Close',
+                '6. volume': 'Volume'
+            })
+            data = data.sort_index(ascending=True) # Ensure chronological order
+            
+            # For swing trading, we only need the last 6 months
+            data = data.last("6M")
+
+            if len(data) < 30:
+                logger.warning(f"Insufficient data for {symbol}: {len(data)} days")
+                return None, None, None
+
+            # Info can be fetched separately if needed, but we'll create a placeholder
+            info = {'shortName': self.get_stock_info_from_db(symbol).get('name', symbol)}
+            
+            logger.info(f"Successfully fetched {len(data)} days of data for {api_symbol}")
+            return data, info, api_symbol
+
         except Exception as e:
-            logger.error(f"Error in get_indian_stock_data for {symbol}: {str(e)}")
+            logger.error(f"Error fetching data for {symbol} from Alpha Vantage: {e}")
             return None, None, None
 
 
@@ -1656,6 +1634,7 @@ class EnhancedSwingTradingSystem:
         except Exception as e:
             logger.error(f"Error printing analysis summary: {str(e)}")
             print(f"Error generating analysis summary: {str(e)}")
+
 
 
 
