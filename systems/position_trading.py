@@ -13,7 +13,7 @@ from bs4 import BeautifulSoup
 from textblob import TextBlob
 import warnings
 import requests
-from twelvedata import TDClient # Import the new library
+from eodhd import EODHDAPIWrapper # Import the new library
 
 # Local application imports
 import config
@@ -39,12 +39,11 @@ class EnhancedPositionTradingSystem:
             self.mda_api_url = config.HF_MDA_API_URL
             self.mda_api_available = bool(self.mda_api_url)
 
-            # --- Twelve Data Setup ---
-            self.td_api_key = os.getenv("TWELVE_DATA_API_KEY")
-            if not self.td_api_key:
-                logger.warning("⚠️ TWELVE_DATA_API_KEY not set. Data fetching will fail.")
-            self.td = TDClient(apikey=self.td_api_key)
-            
+            # --- EODHD API Setup ---
+            self.eodhd_api_key = os.getenv("EODHD_API_KEY")
+            if not self.eodhd_api_key:
+                logger.warning("⚠️ EODHD_API_KEY not set. Data fetching will fail.")
+
             # --- Session for ImprovedMDAExtractor ---
             self.session = requests.Session()
             self.session.headers.update({
@@ -1154,55 +1153,45 @@ class EnhancedPositionTradingSystem:
     
 
     def get_indian_stock_data(self, symbol, period="5y"):
-        """Fetches stock data reliably from the Twelve Data API."""
+        """Fetches stock data reliably from the EODHD API."""
         try:
-            if not symbol:
-                raise ValueError("Empty symbol provided")
+            if not self.eodhd_api_key:
+                raise ValueError("EODHD_API_KEY not set in environment.")
+            
             symbol = str(symbol).upper().replace(".NS", "").replace(".BO", "")
             
-            # Try fetching from NSE first, then BSE as a fallback
-            for exchange in ["NSE", "BSE"]:
-                api_symbol = f"{symbol}:{exchange}"
-                try:
-                    logger.info(f"Trying to fetch data for {api_symbol} from Twelve Data")
-                    
-                    # For long periods, we request the maximum data size
-                    ts = self.td.time_series(
-                        symbol=api_symbol,
-                        interval="1day",
-                        outputsize=5000, # Max size for a single call
-                        timezone="Asia/Kolkata",
-                    )
-                    
-                    if ts is None:
-                        logger.warning(f"No data returned from Twelve Data for {api_symbol}")
-                        continue
-                        
-                    data = ts.as_pandas()
-
-                    # Data validation for position trading (needs at least 1 year)
-                    if data is not None and not data.empty and len(data) >= 252:
-                        data = data.rename(columns={
-                            'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'
-                        })
-                        data = data.sort_index(ascending=True) # Ensure chronological order
-                        
-                        # Use yfinance just for the .info dict, which is more reliable
-                        info = {}
-                        try:
-                            info = yf.Ticker(f"{symbol}.NS").info
-                        except Exception:
-                            info = {'shortName': self.get_stock_info_from_db(symbol).get('name', symbol)}
-                            
-                        logger.info(f"Successfully fetched {len(data)} days of data for {api_symbol}")
-                        return data, info, api_symbol
-
-                except Exception as e:
-                    logger.warning(f"Failed to fetch data for {api_symbol}: {e}")
-                    continue
+            # EODHD uses .INDX for NSE stocks
+            api_symbol = f"{symbol}.INDX" 
             
-            logger.error(f"Failed to fetch data for all variations of {symbol} from Twelve Data.")
-            return None, None, None
+            logger.info(f"Trying to fetch data for {api_symbol} from EODHD")
+            
+            eod_client = EODHDAPIWrapper(self.eodhd_api_key)
+            
+            # The API returns a list of dictionaries, which we'll convert to a DataFrame
+            resp = eod_client.get_historical_data(api_symbol, 'd') # 'd' for daily
+            
+            if not resp:
+                logger.error(f"No data returned from EODHD for {api_symbol}")
+                return None, None, None
+                
+            data = pd.DataFrame(resp).set_index('date')
+            data.index = pd.to_datetime(data.index)
+            
+            # Rename columns to match the format the rest of your code expects
+            data = data.rename(columns={
+                'open': 'Open', 'high': 'High', 'low': 'Low', 'adjusted_close': 'Close', 'volume': 'Volume'
+            })
+            
+            # For position trading, we need at least a year of data
+            if len(data) < 252:
+                 logger.warning(f"Insufficient data for {symbol}: {len(data)} days")
+                 return None, None, None
+
+            # Get company info as a fallback
+            info = {'shortName': self.get_stock_info_from_db(symbol).get('name', symbol)}
+                                
+            logger.info(f"Successfully fetched {len(data)} days of data for {api_symbol}")
+            return data, info, api_symbol
 
         except Exception as e:
             logger.error(f"Critical error in get_indian_stock_data for {symbol}: {e}")
@@ -2292,6 +2281,7 @@ class EnhancedPositionTradingSystem:
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger: logging.Logger = logging.getLogger(__name__)
+
 
 
 
