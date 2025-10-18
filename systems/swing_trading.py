@@ -7,7 +7,7 @@ from typing import Dict, List
 import numpy as np
 import pandas as pd
 from textblob import TextBlob
-from eodhd import EODHDAPIWrapper # Import the new library
+from eodhd import EodHdApi # Import the new library
 import yfinance as yf # Keep for fetching company .info as a fallback
 
 import config
@@ -1636,6 +1636,7 @@ class EnhancedSwingTradingSystem:
         except Exception as e:
             logger.error(f"Error printing analysis summary: {str(e)}")
             print(f"Error generating analysis summary: {str(e)}")
+
 
 
 
