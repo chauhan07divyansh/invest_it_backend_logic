@@ -13,7 +13,7 @@ from bs4 import BeautifulSoup
 from textblob import TextBlob
 import warnings
 import requests
-from eodhd import EODHDAPIWrapper # Import the new library
+from eodhd import EodHdApi # Import the new library
 
 # Local application imports
 import config
@@ -2285,6 +2285,7 @@ class EnhancedPositionTradingSystem:
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger: logging.Logger = logging.getLogger(__name__)
+
 
 
 
