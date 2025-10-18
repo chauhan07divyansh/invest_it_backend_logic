@@ -13,7 +13,7 @@ from bs4 import BeautifulSoup
 from textblob import TextBlob
 import warnings
 import requests
-from eodhd import EodHdApi # Import the new library
+from eodhd import EODHDAPIWrapper # Import the new library
 
 # Local application imports
 import config
