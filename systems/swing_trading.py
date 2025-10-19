@@ -353,74 +353,54 @@ class EnhancedSwingTradingSystem:
             logger.error(f"Error getting sector weights for {sector}: {str(e)}")
             return 0.55, 0.45  # Default weights
 
+        
+
 
     def get_indian_stock_data(self, symbol, period="6mo"):
-    """Fetches stock data reliably from EODHD API or yfinance fallback."""
-    try:
-        symbol = str(symbol).upper().replace(".NS", "").replace(".BO", "")
-        
-        # Try EODHD first
-        if self.eodhd_client:
-            logger.info(f"Fetching data for {symbol} from EODHD")
-            
-            # Convert period to from_date
-            from datetime import timedelta
-            days_map = {
-                '1y': 365, '6mo': 180, '3mo': 90, '1mo': 30, '5y': 1825
-            }
-            days = days_map.get(period, 180)
-            from_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
-            
-            # Try NSE first, then BSE
-            for exchange in ['NSE', 'BSE']:
+        """Fetches stock data reliably from EODHD API or yfinance fallback."""
+        try:
+            symbol = str(symbol).upper().replace(".NS", "").replace(".BO", "")
+
+            # Try EODHD first
+            if self.eodhd_client:
+                logger.info(f"Fetching data for {symbol} from EODHD")
+                for exchange in ['NSE', 'BSE']:
+                    try:
+                        data = self.eodhd_client.get_historical_data(
+                            symbol=symbol,
+                            exchange=exchange,
+                            period=period
+                        )
+                        if not data.empty and len(data) >= 30:
+                            info = {'shortName': self.get_stock_info_from_db(symbol).get('name', symbol)}
+                            api_symbol = f"{symbol}.{exchange}"
+                            logger.info(f"✅ Retrieved {len(data)} days from EODHD {exchange}")
+                            return data, info, api_symbol
+                    except Exception as e:
+                        logger.warning(f"EODHD {exchange} failed for {symbol}: {e}")
+                        continue
+                logger.warning(f"No EODHD data for {symbol}, falling back to yfinance")
+
+            # Fallback to yfinance
+            logger.info(f"Fetching {symbol} from yfinance")
+            for suffix in ['.NS', '.BO']:
                 try:
-                    data = self.eodhd_client.get_historical_data(
-                        symbol=symbol,
-                        exchange=exchange,
-                        from_date=from_date
-                    )
-                    
+                    ticker = yf.Ticker(f"{symbol}{suffix}")
+                    data = ticker.history(period=period)
                     if not data.empty and len(data) >= 30:
-                        # Get company info
                         info = {'shortName': self.get_stock_info_from_db(symbol).get('name', symbol)}
-                        api_symbol = f"{symbol}.{exchange}"
-                        
-                        logger.info(f"✅ Retrieved {len(data)} days from EODHD {exchange}")
-                        return data, info, api_symbol
-                        
+                        logger.info(f"✅ Retrieved {len(data)} days from yfinance{suffix}")
+                        return data, info, f"{symbol}{suffix}"
                 except Exception as e:
-                    logger.warning(f"EODHD {exchange} failed for {symbol}: {e}")
+                    logger.warning(f"yfinance{suffix} failed for {symbol}: {e}")
                     continue
-            
-            logger.warning(f"No EODHD data for {symbol}, falling back to yfinance")
-        
-        # Fallback to yfinance
-        logger.info(f"Fetching {symbol} from yfinance")
-        
-        for suffix in ['.NS', '.BO']:
-            try:
-                ticker = yf.Ticker(f"{symbol}{suffix}")
-                data = ticker.history(period=period)
-                
-                if not data.empty and len(data) >= 30:
-                    data = data.reset_index()
-                    info = {'shortName': self.get_stock_info_from_db(symbol).get('name', symbol)}
-                    
-                    logger.info(f"✅ Retrieved {len(data)} days from yfinance{suffix}")
-                    return data, info, f"{symbol}{suffix}"
-                    
-            except Exception as e:
-                logger.warning(f"yfinance{suffix} failed for {symbol}: {e}")
-                continue
-        
-        logger.error(f"❌ All data sources failed for {symbol}")
-        return None, None, None
-                    
-    except Exception as e:
-        logger.error(f"Critical error in get_indian_stock_data for {symbol}: {e}")
-        return None, None, None
 
+            logger.error(f"❌ All data sources failed for {symbol}")
+            return None, None, None
 
+        except Exception as e:
+            logger.error(f"Critical error in get_indian_stock_data for {symbol}: {e}")
+            return None, None, None
     def safe_rolling_calculation(self, data, window, operation='mean'):
         """Safely perform rolling calculations with error handling"""
         try:
@@ -1659,6 +1639,7 @@ class EnhancedSwingTradingSystem:
         except Exception as e:
             logger.error(f"Error printing analysis summary: {str(e)}")
             print(f"Error generating analysis summary: {str(e)}")
+
 
 
 
