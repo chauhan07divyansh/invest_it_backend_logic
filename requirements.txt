@@ -22,7 +22,7 @@ matplotlib==3.7.2
 seaborn==0.12.2
 yfinance==0.2.37
 beautifulsoup4==4.12.2
-eodhd==1.0.32
+# eodhd package removed - using direct API calls instead
 
 # Machine Learning and NLP
 torch==2.2.0+cpu
