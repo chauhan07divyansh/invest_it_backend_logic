@@ -13,11 +13,7 @@ from bs4 import BeautifulSoup
 from textblob import TextBlob
 import warnings
 import requests
-try:
-    from eodhd import EODHDAPIWrapper
-except ImportError:
-    from eodhd import EodHdApi as EODHDAPIWrapper
-    logger.info("✅ Using EodHdApi class from eodhd 1.0.32") # Import the new library
+from eodhd_wrapper import EODHDClient
 
 # Local application imports
 import config
@@ -44,9 +40,12 @@ class EnhancedPositionTradingSystem:
             self.mda_api_available = bool(self.mda_api_url)
 
             # --- EODHD API Setup ---
-            self.eodhd_api_key = os.getenv("EODHD_API_KEY")
-            if not self.eodhd_api_key:
-                logger.warning("⚠️ EODHD_API_KEY not set. Data fetching will fail.")
+            try:
+                self.eodhd_client = EODHDClient()
+                logger.info("✅ EODHD Client initialized successfully")
+            except Exception as e:
+                logger.warning(f"⚠️ EODHD initialization failed: {e}. Will use yfinance as fallback")
+                self.eodhd_client = None
 
             # --- Session for ImprovedMDAExtractor ---
             self.session = requests.Session()
@@ -1157,53 +1156,75 @@ class EnhancedPositionTradingSystem:
     
 
     def get_indian_stock_data(self, symbol, period="5y"):
-        """Fetches stock data reliably from the EODHD API."""
-        try:
-            if not self.eodhd_api_key:
-                raise ValueError("EODHD_API_KEY not set in environment.")
+    """Fetches stock data reliably from EODHD API or yfinance fallback."""
+    try:
+        symbol = str(symbol).upper().replace(".NS", "").replace(".BO", "")
+        
+        # Try EODHD first
+        if self.eodhd_client:
+            logger.info(f"Fetching data for {symbol} from EODHD")
             
-            symbol = str(symbol).upper().replace(".NS", "").replace(".BO", "")
+            # Convert period to from_date
+            from datetime import timedelta
+            days_map = {
+                '1y': 365, '5y': 1825, '3y': 1095, '2y': 730, '10y': 3650
+            }
+            days = days_map.get(period, 1825)  # Default to 5 years
+            from_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
             
-            # EODHD uses .INDX for NSE stocks
-            api_symbol = f"{symbol}.INDX" 
+            # Try NSE first, then BSE
+            for exchange in ['NSE', 'BSE']:
+                try:
+                    data = self.eodhd_client.get_historical_data(
+                        symbol=symbol,
+                        exchange=exchange,
+                        from_date=from_date
+                    )
+                    
+                    # Position trading needs at least 1 year of data
+                    if not data.empty and len(data) >= 252:
+                        # Get company info
+                        info = {}
+                        try:
+                            info = yf.Ticker(f"{symbol}.{exchange}").info
+                        except:
+                            info = {'shortName': self.get_stock_info_from_db(symbol).get('name', symbol)}
+                        
+                        api_symbol = f"{symbol}.{exchange}"
+                        logger.info(f"✅ Retrieved {len(data)} days from EODHD {exchange}")
+                        return data, info, api_symbol
+                        
+                except Exception as e:
+                    logger.warning(f"EODHD {exchange} failed for {symbol}: {e}")
+                    continue
             
-            logger.info(f"Trying to fetch data for {api_symbol} from EODHD")
-            
-            eod_client = EODHDAPIWrapper(self.eodhd_api_key)
-            
-            # The API returns a list of dictionaries, which we'll convert to a DataFrame
-            resp = eod_client.get_historical_data(api_symbol, 'd') # 'd' for daily
-            
-            if not resp:
-                logger.error(f"No data returned from EODHD for {api_symbol}")
-                return None, None, None
-                
-            data = pd.DataFrame(resp).set_index('date')
-            data.index = pd.to_datetime(data.index)
-            
-            # Rename columns to match the format the rest of your code expects
-            data = data.rename(columns={
-                'open': 'Open', 'high': 'High', 'low': 'Low', 'adjusted_close': 'Close', 'volume': 'Volume'
-            })
-            
-            # For position trading, we need at least a year of data
-            if len(data) < 252:
-                 logger.warning(f"Insufficient data for {symbol}: {len(data)} days")
-                 return None, None, None
-
-            # Get company info as a fallback
-            info = {}
+            logger.warning(f"No EODHD data for {symbol}, falling back to yfinance")
+        
+        # Fallback to yfinance
+        logger.info(f"Fetching {symbol} from yfinance")
+        
+        for suffix in ['.NS', '.BO']:
             try:
-                info = yf.Ticker(f"{symbol}.NS").info
-            except Exception:
-                info = {'shortName': self.get_stock_info_from_db(symbol).get('name', symbol)}
-                                
-            logger.info(f"Successfully fetched {len(data)} days of data for {api_symbol}")
-            return data, info, api_symbol
-
-        except Exception as e:
-            logger.error(f"Critical error in get_indian_stock_data for {symbol}: {e}")
-            return None, None, None
+                ticker = yf.Ticker(f"{symbol}{suffix}")
+                data = ticker.history(period=period)
+                
+                if not data.empty and len(data) >= 252:
+                    data = data.reset_index()
+                    info = ticker.info
+                    
+                    logger.info(f"✅ Retrieved {len(data)} days from yfinance{suffix}")
+                    return data, info, f"{symbol}{suffix}"
+                    
+            except Exception as e:
+                logger.warning(f"yfinance{suffix} failed for {symbol}: {e}")
+                continue
+        
+        logger.error(f"❌ All data sources failed for {symbol}")
+        return None, None, None
+                    
+    except Exception as e:
+        logger.error(f"Critical error in get_indian_stock_data for {symbol}: {e}")
+        return None, None, None
 
     def analyze_fundamental_metrics(self, symbol, info):
         """Analyze fundamental metrics crucial for position trading"""
@@ -2289,6 +2310,7 @@ class EnhancedPositionTradingSystem:
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger: logging.Logger = logging.getLogger(__name__)
+
 
 
 
