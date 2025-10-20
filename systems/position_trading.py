@@ -37,6 +37,7 @@ class EnhancedPositionTradingSystem:
             
             self.mda_api_url = config.HF_MDA_API_URL
             self.mda_api_available = bool(self.mda_api_url)
+            self.mda_available = self.mda_api_available  # Alias for compatibility
 
             # --- EODHD API Setup ---
             try:
@@ -1007,7 +1008,7 @@ class EnhancedPositionTradingSystem:
 
                 # Model information
                 'model_type': self.model_type,
-                'mda_model_available': self.mda_available,
+                'mda_model_available': self.mda_api_available,
                 'analysis_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                 'analysis_type': 'Position Trading (Long-term with MDA)'
             }
@@ -2308,6 +2309,7 @@ class EnhancedPositionTradingSystem:
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger: logging.Logger = logging.getLogger(__name__)
+
 
 
 
