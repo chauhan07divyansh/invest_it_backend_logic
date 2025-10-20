@@ -1181,7 +1181,7 @@ class EnhancedPositionTradingSystem:
                         )
                         
                         # Position trading needs at least 1 year of data
-                        if not data.empty and len(data) >= 252:
+                        if not data.empty and len(data) >= 200:
                             # Get company info
                             info = {}
                             try:
@@ -2308,6 +2308,7 @@ class EnhancedPositionTradingSystem:
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger: logging.Logger = logging.getLogger(__name__)
+
 
 
 
