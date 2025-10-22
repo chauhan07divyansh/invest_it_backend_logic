@@ -18,7 +18,17 @@ except ImportError as e:
     logging.critical(f"Could not import trading systems: {e}. API will run in a degraded mode.")
 
 app = Flask(__name__)
-CORS(app)
+
+# --- Secure CORS Configuration ---
+# Define the live URL of your React frontend
+FRONTEND_URL = "https://sentiquant-frontend.onrender.com" 
+
+# Allow requests *only* from your frontend URL
+CORS(app, resources={r"/api/*": {"origins": FRONTEND_URL}})
+# --- End of CORS Setup ---
+
+
+# --- Logging Configuration ---
 
 # --- Logging Configuration ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
