@@ -5,6 +5,9 @@ from datetime import datetime
 from functools import wraps
 import traceback
 import math
+from data_providers import StockDataProvider
+from symbol_mapper import SymbolMapper
+import os
 
 # --- Graceful Import of Trading Systems ---
 SYSTEMS_AVAILABLE = False
@@ -90,24 +93,69 @@ class TradingAPI:
     """Handles all trading logic and system interactions."""
 
     def __init__(self):
+        # Initialize data provider FIRST
+        self.data_provider = None
+        self.symbol_mapper = None
+        self._initialize_data_provider()
+        
+        # Then initialize trading systems
         self.swing_system = None
         self.position_system = None
         if SYSTEMS_AVAILABLE:
             self.initialize_systems()
         else:
             logger.warning("Trading systems not imported. API is in a degraded state.")
+    
+    def _initialize_data_provider(self):
+        """Initialize the unified data provider with Fyers + Screener.in"""
+        try:
+            # Get credentials from environment
+            fyers_app_id = os.getenv('FYERS_APP_ID')
+            fyers_access_token = os.getenv('FYERS_ACCESS_TOKEN')
+            redis_url = os.getenv('REDIS_URL')
+            
+            if not fyers_app_id or not fyers_access_token:
+                logger.error("❌ FYERS_APP_ID or FYERS_ACCESS_TOKEN not configured!")
+                logger.warning("Data fetching will fail. Please configure Fyers credentials.")
+                return
+            
+            # Initialize symbol mapper
+            self.symbol_mapper = SymbolMapper()
+            logger.info(f"✅ SymbolMapper initialized with {len(self.symbol_mapper.get_all_symbols())} symbols")
+            
+            # Initialize unified data provider
+            self.data_provider = StockDataProvider(
+                fyers_app_id=fyers_app_id,
+                fyers_access_token=fyers_access_token,
+                symbol_mapper=self.symbol_mapper,
+                redis_url=redis_url
+            )
+            logger.info("✅ StockDataProvider initialized successfully")
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize data provider: {e}")
+            import traceback
+            traceback.print_exc()
+
 
     def initialize_systems(self):
-        """Initializes each trading system individually for better resilience."""
+        """Initializes each trading system individually with data provider injection."""
         logger.info("Initializing trading systems...")
+        
+        if not self.data_provider:
+            logger.error("❌ Cannot initialize trading systems: Data provider not available")
+            return
+        
         try:
-            self.swing_system = EnhancedSwingTradingSystem()
+            # Pass data_provider to swing system
+            self.swing_system = EnhancedSwingTradingSystem(data_provider=self.data_provider)
             logger.info("✅ EnhancedSwingTradingSystem initialized successfully.")
         except Exception:
             logger.critical("❌ FAILED to initialize EnhancedSwingTradingSystem", exc_info=True)
 
         try:
-            self.position_system = EnhancedPositionTradingSystem()
+            # Pass data_provider to position system
+            self.position_system = EnhancedPositionTradingSystem(data_provider=self.data_provider)
             logger.info("✅ EnhancedPositionTradingSystem initialized successfully.")
         except Exception:
             logger.critical("❌ FAILED to initialize EnhancedPositionTradingSystem", exc_info=True)
@@ -475,7 +523,30 @@ def not_found(error):
 @app.errorhandler(500)
 def internal_error(error):
     return jsonify({'success': False, 'error': 'Internal server error'}), 500
-
+@app.route('/api/health', methods=['GET'])
+def health_check():
+    """Health check endpoint to verify data provider status"""
+    status = {
+        'api': 'healthy',
+        'data_provider': trading_api.data_provider is not None,
+        'fyers_configured': bool(os.getenv('FYERS_APP_ID') and os.getenv('FYERS_ACCESS_TOKEN')),
+        'redis_configured': bool(os.getenv('REDIS_URL')),
+        'swing_system': trading_api.swing_system is not None,
+        'position_system': trading_api.position_system is not None
+    }
+    
+    all_healthy = all([
+        status['data_provider'],
+        status['fyers_configured'],
+        status['swing_system'],
+        status['position_system']
+    ])
+    
+    return jsonify({
+        'success': True,
+        'status': 'healthy' if all_healthy else 'degraded',
+        'components': status
+    }), 200 if all_healthy else 503
 
 if __name__ == "__main__":
     from waitress import serve
