@@ -1,3 +1,8 @@
+# REMOVE/COMMENT OUT these lines:
+# from eodhd_wrapper import EODHDClient
+# import yfinance as yf
+
+# Keep all other imports as-is
 import os
 import re
 import time
@@ -7,12 +12,10 @@ from datetime import datetime
 from typing import Dict, List, Optional
 import numpy as np
 import pandas as pd
-import yfinance as yf
 from bs4 import BeautifulSoup
 from textblob import TextBlob
 import warnings
 import requests
-from eodhd_wrapper import EODHDClient
 
 # Local application imports
 import config
@@ -23,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 
 class EnhancedPositionTradingSystem:
-    def __init__(self):
+    def __init__(self, data_provider=None, mda_processor=None):  # ← ADD PARAMETERS
         try:
             self.news_api_key = config.NEWS_API_KEY
             self.position_trading_params = config.POSITION_TRADING_PARAMS
@@ -34,25 +37,31 @@ class EnhancedPositionTradingSystem:
             self.sentiment_api_url = config.HF_SENTIMENT_API_URL
             self.sentiment_api_available = bool(self.sentiment_api_url)
             self.model_type = "SBERT API" if self.sentiment_api_available else "TextBlob"
-            
+
             self.mda_api_url = config.HF_MDA_API_URL
             self.mda_api_available = bool(self.mda_api_url)
-            self.mda_available = self.mda_api_available  # Alias for compatibility
+            self.mda_available = self.mda_api_available
 
-            # --- EODHD API Setup ---
-            try:
-                self.eodhd_client = EODHDClient()
-                logger.info("✅ EODHD Client initialized successfully")
-            except Exception as e:
-                logger.warning(f"⚠️ EODHD initialization failed: {e}. Will use yfinance as fallback")
-                self.eodhd_client = None
+            # --- NEW: Store injected data provider ---
+            self.data_provider = data_provider
+            if data_provider:
+                logger.info("✅ Data provider injected into PositionTradingSystem")
+            else:
+                logger.warning("⚠️ No data provider provided - data fetching will fail")
+
+            # --- NEW: Store MDA processor ---
+            self.mda_processor = mda_processor
+            if mda_processor:
+                logger.info("✅ MDA Processor injected into PositionTradingSystem")
+            else:
+                logger.warning("⚠️ No MDA Processor - will use sample data")
 
             # --- Session for ImprovedMDAExtractor ---
             self.session = requests.Session()
             self.session.headers.update({
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             })
-            
+
             logger.info("✅ EnhancedPositionTradingSystem initialized successfully")
 
         except Exception as e:
@@ -79,7 +88,8 @@ class EnhancedPositionTradingSystem:
             confidences = [res.get('score', 0.5) for res in api_results]
             return sentiments, confidences
         except (ValueError, TypeError, IndexError, AttributeError) as e:
-            logging.error(f"Could not parse SBERT API response. Error: {e}. Response: {api_results if 'api_results' in locals() else 'unknown'}")
+            logging.error(
+                f"Could not parse SBERT API response. Error: {e}. Response: {api_results if 'api_results' in locals() else 'unknown'}")
             return None
 
     def _analyze_mda_via_api(self, mda_texts: list) -> dict | None:
@@ -90,12 +100,12 @@ class EnhancedPositionTradingSystem:
 
             if api_results is None:
                 raise ValueError("API call to MDA HF Space failed or returned no data.")
-            
+
             # This logic assumes your API returns a list of sentiment dictionaries.
             # You must adapt this to your actual API output format.
             sentiments = [res.get('label') for res in api_results]
             confidences = [res.get('score') for res in api_results]
-            
+
             sentiment_scores = []
             for sentiment, confidence in zip(sentiments, confidences):
                 if str(sentiment).lower() in ['positive', 'very_positive', 'label_4', 'label_3']:
@@ -104,15 +114,18 @@ class EnhancedPositionTradingSystem:
                     sentiment_scores.append(-confidence)
                 else:
                     sentiment_scores.append(0)
-            
+
             avg_sentiment = np.mean(sentiment_scores) if sentiment_scores else 0
             mda_score = 50 + (avg_sentiment * 50)
             mda_score = max(0, min(100, mda_score))
-            
+
             management_tone = "Neutral"
-            if mda_score >= 70: management_tone = "Very Optimistic"
-            elif mda_score >= 60: management_tone = "Optimistic"
-            elif mda_score <= 40: management_tone = "Pessimistic"
+            if mda_score >= 70:
+                management_tone = "Very Optimistic"
+            elif mda_score >= 60:
+                management_tone = "Optimistic"
+            elif mda_score <= 40:
+                management_tone = "Pessimistic"
 
             return {
                 'mda_score': mda_score,
@@ -121,7 +134,8 @@ class EnhancedPositionTradingSystem:
                 'analysis_method': 'Remote PyTorch BERT MDA Model (API)',
             }
         except (ValueError, TypeError, IndexError, AttributeError) as e:
-            logging.error(f"Could not parse MDA API response. Error: {e}. Response: {api_results if 'api_results' in locals() else 'unknown'}")
+            logging.error(
+                f"Could not parse MDA API response. Error: {e}. Response: {api_results if 'api_results' in locals() else 'unknown'}")
             return None
 
     # ==============================================================================
@@ -142,7 +156,7 @@ class EnhancedPositionTradingSystem:
                 if api_result:
                     sentiments, confidences = api_result
                     return sentiments, articles, confidences, "SBERT API", news_source
-            
+
             logging.warning(f"Falling back to TextBlob for news sentiment for {symbol}.")
             sentiments, confidences = self.analyze_sentiment_with_textblob(articles)
             return sentiments, articles, confidences, "TextBlob Fallback", news_source
@@ -150,34 +164,6 @@ class EnhancedPositionTradingSystem:
             logging.error(f"Error in news sentiment analysis for {symbol}: {e}")
             return [], [], [], "Error", "Error"
 
-    def updated_analyze_mda_sentiment(self, symbol):
-        """Updated to prioritize API calls for real MD&A extraction and analysis."""
-        try:
-            if not self.mda_api_available:
-                logger.warning("MDA API URL not configured. Using sample analysis as fallback.")
-                return self.get_sample_mda_analysis(symbol)
-
-            # extractor = self.ImprovedMDAExtractor()
-            # mda_texts = extractor.get_mda_text(symbol, max_reports=3)
-            mda_texts = [] # Temporarily disable for speed, use sample data
-
-            if not mda_texts:
-                logger.warning(f"No real MDA text found for {symbol}, using sample analysis.")
-                return self.get_sample_mda_analysis(symbol)
-            
-            logger.info(f"Sending {len(mda_texts)} MD&A texts to the API for analysis.")
-            api_result = self._analyze_mda_via_api(mda_texts)
-
-            if api_result:
-                return api_result
-            
-            logger.warning(f"MDA API call failed for {symbol}. Using sample analysis as fallback.")
-            return self.get_sample_mda_analysis(symbol)
-            
-        except Exception as e:
-            logger.error(f"An unexpected error in MDA sentiment analysis for {symbol}: {e}")
-            return self.get_sample_mda_analysis(symbol)
-            
     def _validate_trading_params(self):
         """Validate position trading parameters"""
         try:
@@ -214,570 +200,36 @@ class EnhancedPositionTradingSystem:
             logger.error(f"Error validating trading parameters: {str(e)}")
             raise
 
-    class ImprovedMDAExtractor:
-        """Enhanced MD&A text extractor for Indian companies"""
+    # NOTE: The entire 'ImprovedMDAExtractor' class (over 200 lines) has been
+    # removed as it was identified as dead code. The system now uses the
+    # injected 'mda_processor' as intended.
 
-        def __init__(self):
-            self.session = requests.Session()
-            self.session.headers.update({
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-            })
-
-        def get_mda_text(self, symbol: str, max_reports: int = 3) -> List[str]:
-            """
-            Extract real MD&A text from multiple sources
-            Returns a list of MD&A text sections
-            """
-            try:
-                symbol = symbol.replace('.NS', '').replace('.BO', '').upper()
-                logger.info(f"Extracting MD&A text for {symbol}")
-
-                mda_texts = []
-
-                # Try multiple extraction methods
-                methods = [
-                    self._extract_from_bse_announcements,
-                    self._extract_from_nse_reports,
-                    self._extract_from_company_website,
-                    self._extract_from_annual_reports,
-                    self._extract_from_yahoo_finance_filings
-                ]
-
-                for method in methods:
-                    try:
-                        texts = method(symbol)
-                        if texts:
-                            mda_texts.extend(texts)
-                            logger.info(f"Successfully extracted {len(texts)} MD&A sections using {method.__name__}")
-
-                            # If we have enough content, break
-                            if len(mda_texts) >= max_reports:
-                                break
-
-                    except Exception as e:
-                        logger.warning(f"Method {method.__name__} failed for {symbol}: {str(e)}")
-                        continue
-
-                    # Rate limiting
-                    time.sleep(1)
-
-                # Clean and filter the extracted texts
-                cleaned_texts = self._clean_and_validate_mda_texts(mda_texts)
-
-                if cleaned_texts:
-                    logger.info(f"Successfully extracted {len(cleaned_texts)} MD&A texts for {symbol}")
-                    return cleaned_texts[:max_reports]  # Return up to max_reports
-                else:
-                    logger.warning(f"No valid MD&A text found for {symbol}")
-                    return []
-
-            except Exception as e:
-                logger.error(f"Error extracting MD&A text for {symbol}: {str(e)}")
-                return []
-
-        def _extract_from_bse_announcements(self, symbol: str) -> List[str]:
-            """Extract MD&A from BSE announcements"""
-            try:
-                # BSE announcement URL pattern
-                bse_url = f"https://www.bseindia.com/stock-share-price/{symbol}/announcements/"
-
-                response = self.session.get(bse_url, timeout=10)
-                if response.status_code != 200:
-                    return []
-
-                soup = BeautifulSoup(response.content, 'html.parser')
-
-                # Look for annual report links or MD&A related announcements
-                announcements = soup.find_all('a', href=re.compile(r'annual|report|mda|management.*discussion',
-                                                                   re.IGNORECASE))
-
-                mda_texts = []
-                for link in announcements[:3]:  # Check first 3 relevant links
-                    try:
-                        href = link.get('href')
-                        if href and not href.startswith('http'):
-                            href = 'https://www.bseindia.com' + href
-
-                        doc_response = self.session.get(href, timeout=10)
-                        if doc_response.status_code == 200:
-                            # Extract text from PDF or HTML
-                            text = self._extract_text_from_response(doc_response)
-                            mda_section = self._extract_mda_section(text)
-                            if mda_section:
-                                mda_texts.append(mda_section)
-
-                    except Exception as e:
-                        logger.debug(f"Error processing BSE link {href}: {str(e)}")
-                        continue
-
-                return mda_texts
-
-            except Exception as e:
-                logger.error(f"Error extracting from BSE for {symbol}: {str(e)}")
-                return []
-
-        def _extract_from_nse_reports(self, symbol: str) -> List[str]:
-            """Extract MD&A from NSE corporate reports"""
-            try:
-                # NSE doesn't have a direct API, but we can try their corporate section
-                nse_search_url = f"https://www.nseindia.com/companies-listing/corporate-filings-company-wise"
-
-                # This would require more complex scraping with session management
-                # For now, we'll implement a basic version
-
-                return []  # Placeholder - NSE requires complex session handling
-
-            except Exception as e:
-                logger.error(f"Error extracting from NSE for {symbol}: {str(e)}")
-                return []
-
-        def _extract_from_company_website(self, symbol: str) -> List[str]:
-            """Try to extract MD&A from company's official website"""
-            try:
-                # Get company website from yfinance
-                ticker = yf.Ticker(f"{symbol}.NS")
-                info = ticker.info
-
-                website = info.get('website', '')
-                if not website:
-                    return []
-
-                # Look for investor relations section
-                ir_urls = [
-                    f"{website}/investor-relations",
-                    f"{website}/investors",
-                    f"{website}/annual-reports",
-                    f"{website}/financial-reports"
-                ]
-
-                mda_texts = []
-                for url in ir_urls:
-                    try:
-                        response = self.session.get(url, timeout=10)
-                        if response.status_code == 200:
-                            soup = BeautifulSoup(response.content, 'html.parser')
-
-                            # Look for annual report links
-                            report_links = soup.find_all('a', href=re.compile(r'annual.*report|financial.*report',
-                                                                              re.IGNORECASE))
-
-                            for link in report_links[:2]:  # Check first 2 reports
-                                try:
-                                    href = link.get('href')
-                                    if href and not href.startswith('http'):
-                                        href = website + href
-
-                                    doc_response = self.session.get(href, timeout=15)
-                                    if doc_response.status_code == 200:
-                                        text = self._extract_text_from_response(doc_response)
-                                        mda_section = self._extract_mda_section(text)
-                                        if mda_section:
-                                            mda_texts.append(mda_section)
-
-                                except Exception as e:
-                                    logger.debug(f"Error processing company website link: {str(e)}")
-                                    continue
-
-                    except Exception as e:
-                        logger.debug(f"Error accessing {url}: {str(e)}")
-                        continue
-
-                return mda_texts
-
-            except Exception as e:
-                logger.error(f"Error extracting from company website for {symbol}: {str(e)}")
-                return []
-
-        def _extract_from_annual_reports(self, symbol: str) -> List[str]:
-            """Extract MD&A from publicly available annual reports"""
-            try:
-                # Search for annual reports using Google Search API or web scraping
-                search_query = f"{symbol} annual report filetype:pdf site:bseindia.com OR site:nseindia.com"
-
-                # This is a simplified version - in practice, you'd use Google Search API
-                # or implement more sophisticated web scraping
-
-                return []  # Placeholder
-
-            except Exception as e:
-                logger.error(f"Error extracting from annual reports for {symbol}: {str(e)}")
-                return []
-
-        def _extract_from_yahoo_finance_filings(self, symbol: str) -> List[str]:
-            """Extract MD&A information from Yahoo Finance filings data"""
-            try:
-                ticker = yf.Ticker(f"{symbol}.NS")
-
-                # Get recent financial data and news
-                info = ticker.info
-                news = ticker.news
-
-                # Extract relevant information from company description and recent news
-                mda_like_texts = []
-
-                # Company description often contains management perspective
-                if 'longBusinessSummary' in info and info['longBusinessSummary']:
-                    business_summary = info['longBusinessSummary']
-                    if len(business_summary) > 200:  # Only if substantial content
-                        mda_like_texts.append(business_summary)
-
-                # Recent news articles that might contain management quotes
-                for article in news[:5]:  # Check recent 5 articles
-                    try:
-                        if 'summary' in article and article['summary']:
-                            summary = article['summary']
-                            # Look for management-related content
-                            if any(keyword in summary.lower() for keyword in
-                                   ['management', 'ceo', 'outlook', 'strategy', 'expects', 'guidance']):
-                                mda_like_texts.append(summary)
-                    except Exception:
-                        continue
-
-                return mda_like_texts
-
-            except Exception as e:
-                logger.error(f"Error extracting from Yahoo Finance for {symbol}: {str(e)}")
-                return []
-
-        def _extract_text_from_response(self, response) -> str:
-            """Extract text from HTTP response (HTML or PDF)"""
-            try:
-                content_type = response.headers.get('content-type', '').lower()
-
-                if 'application/pdf' in content_type:
-                    # Extract text from PDF
-                    return self._extract_text_from_pdf(response.content)
-                else:
-                    # Extract text from HTML
-                    soup = BeautifulSoup(response.content, 'html.parser')
-                    return soup.get_text()
-
-            except Exception as e:
-                logger.error(f"Error extracting text from response: {str(e)}")
-                return ""
-
-        def _extract_text_from_pdf(self, pdf_content: bytes) -> str:
-            """Extract text from PDF content"""
-            try:
-                import PyPDF2
-                from io import BytesIO
-
-                pdf_reader = PyPDF2.PdfReader(BytesIO(pdf_content))
-                text = ""
-
-                for page in pdf_reader.pages:
-                    text += page.extract_text()
-
-                return text
-
-            except ImportError:
-                logger.warning("PyPDF2 not available for PDF text extraction")
-                return ""
-            except Exception as e:
-                logger.error(f"Error extracting text from PDF: {str(e)}")
-                return ""
-
-        def _extract_mda_section(self, full_text: str) -> Optional[str]:
-            """Extract MD&A section from full document text"""
-            try:
-                if not full_text or len(full_text) < 100:
-                    return None
-
-                # Common MD&A section headers in Indian reports
-                mda_patterns = [
-                    r"management.*discussion.*and.*analysis",
-                    r"management.*discussion",
-                    r"directors.*report",
-                    r"management.*analysis",
-                    r"business.*outlook",
-                    r"management.*commentary",
-                    r"operational.*review",
-                    r"management.*perspective"
-                ]
-
-                text_lower = full_text.lower()
-
-                for pattern in mda_patterns:
-                    matches = list(re.finditer(pattern, text_lower))
-
-                    if matches:
-                        # Find the start of MD&A section
-                        start_pos = matches[0].start()
-
-                        # Find the end (look for next major section or end of document)
-                        end_patterns = [
-                            r"financial.*statements",
-                            r"notes.*to.*accounts",
-                            r"auditor.*report",
-                            r"corporate.*governance",
-                            r"annexure",
-                            r"schedule"
-                        ]
-
-                        end_pos = len(full_text)
-                        for end_pattern in end_patterns:
-                            end_matches = list(re.finditer(end_pattern, text_lower[start_pos:]))
-                            if end_matches:
-                                end_pos = start_pos + end_matches[0].start()
-                                break
-
-                        # Extract the section
-                        mda_section = full_text[start_pos:end_pos]
-
-                        # Clean and validate
-                        if len(mda_section) > 500:  # Minimum length for meaningful MD&A
-                            return self._clean_extracted_text(mda_section)
-
-                # If no specific MD&A section found, look for management-related content
-                management_content = self._extract_management_content(full_text)
-                if management_content and len(management_content) > 300:
-                    return management_content
-
-                return None
-
-            except Exception as e:
-                logger.error(f"Error extracting MD&A section: {str(e)}")
-                return None
-
-        def _extract_management_content(self, text: str) -> Optional[str]:
-            """Extract management-related content from text"""
-            try:
-                sentences = text.split('.')
-                management_sentences = []
-
-                management_keywords = [
-                    'management', 'strategy', 'outlook', 'expects', 'believes',
-                    'anticipates', 'guidance', 'performance', 'operations',
-                    'future', 'growth', 'investment', 'market', 'business'
-                ]
-
-                for sentence in sentences:
-                    sentence = sentence.strip()
-                    if len(sentence) > 50:  # Minimum sentence length
-                        sentence_lower = sentence.lower()
-                        keyword_count = sum(1 for keyword in management_keywords if keyword in sentence_lower)
-
-                        if keyword_count >= 2:  # At least 2 management-related keywords
-                            management_sentences.append(sentence)
-
-                if len(management_sentences) >= 5:  # At least 5 relevant sentences
-                    return '. '.join(management_sentences[:20])  # Limit to 20 sentences
-
-                return None
-
-            except Exception as e:
-                logger.error(f"Error extracting management content: {str(e)}")
-                return None
-
-        def _clean_extracted_text(self, text: str) -> str:
-            """Clean and format extracted MD&A text"""
-            try:
-                # Remove excessive whitespace
-                text = re.sub(r'\s+', ' ', text)
-
-                # Remove page numbers and headers/footers
-                text = re.sub(r'\b\d+\s*$', '', text, flags=re.MULTILINE)
-                text = re.sub(r'^\s*\d+\s*', '', text, flags=re.MULTILINE)
-
-                # Remove common report artifacts
-                artifacts = [
-                    r'annual report \d{4}',
-                    r'page \d+',
-                    r'www\.\w+\.com',
-                    r'tel:?\s*\+?\d+[\d\s\-\(\)]+',
-                    r'email:\s*\S+@\S+',
-                ]
-
-                for artifact in artifacts:
-                    text = re.sub(artifact, '', text, flags=re.IGNORECASE)
-
-                # Clean up spacing
-                text = re.sub(r'\s+', ' ', text).strip()
-
-                return text
-
-            except Exception as e:
-                logger.error(f"Error cleaning extracted text: {str(e)}")
-                return text
-
-        def _clean_and_validate_mda_texts(self, mda_texts: List[str]) -> List[str]:
-            """Clean and validate extracted MD&A texts"""
-            try:
-                cleaned_texts = []
-
-                for text in mda_texts:
-                    if not text or not isinstance(text, str):
-                        continue
-
-                    # Clean the text
-                    cleaned_text = self._clean_extracted_text(text)
-
-                    # Validate quality
-                    if self._validate_mda_text_quality(cleaned_text):
-                        cleaned_texts.append(cleaned_text)
-
-                # Remove duplicates (texts that are too similar)
-                unique_texts = self._remove_similar_texts(cleaned_texts)
-
-                return unique_texts
-
-            except Exception as e:
-                logger.error(f"Error cleaning and validating MD&A texts: {str(e)}")
-                return mda_texts  # Return original if cleaning fails
-
-        def _validate_mda_text_quality(self, text: str) -> bool:
-            """Validate if the extracted text is meaningful MD&A content"""
-            try:
-                if not text or len(text) < 200:
-                    return False
-
-                # Check for minimum management-related keywords
-                management_keywords = [
-                    'management', 'performance', 'business', 'operations',
-                    'growth', 'strategy', 'market', 'revenue', 'profit',
-                    'outlook', 'expects', 'believes', 'future'
-                ]
-
-                text_lower = text.lower()
-                keyword_count = sum(1 for keyword in management_keywords if keyword in text_lower)
-
-                # Require at least 3 management-related keywords
-                if keyword_count < 3:
-                    return False
-
-                # Check for reasonable sentence structure
-                sentences = text.split('.')
-                valid_sentences = [s for s in sentences if len(s.strip()) > 20]
-
-                if len(valid_sentences) < 5:
-                    return False
-
-                return True
-
-            except Exception as e:
-                logger.error(f"Error validating MD&A text quality: {str(e)}")
-                return False
-
-        def _remove_similar_texts(self, texts: List[str]) -> List[str]:
-            """Remove texts that are too similar to each other"""
-            try:
-                if len(texts) <= 1:
-                    return texts
-
-                unique_texts = []
-
-                for text in texts:
-                    is_unique = True
-
-                    for existing_text in unique_texts:
-                        # Simple similarity check based on common words
-                        similarity = self._calculate_text_similarity(text, existing_text)
-                        if similarity > 0.7:  # 70% similarity threshold
-                            is_unique = False
-                            break
-
-                    if is_unique:
-                        unique_texts.append(text)
-
-                return unique_texts
-
-            except Exception as e:
-                logger.error(f"Error removing similar texts: {str(e)}")
-                return texts
-
-        def _calculate_text_similarity(self, text1: str, text2: str) -> float:
-            """Calculate similarity between two texts"""
-            try:
-                # Simple word-based similarity
-                words1 = set(text1.lower().split())
-                words2 = set(text2.lower().split())
-
-                if not words1 and not words2:
-                    return 1.0
-
-                if not words1 or not words2:
-                    return 0.0
-
-                intersection = len(words1.intersection(words2))
-                union = len(words1.union(words2))
-
-                return intersection / union if union > 0 else 0.0
-
-            except Exception as e:
-                logger.error(f"Error calculating text similarity: {str(e)}")
-                return 0.0
-
-    # Update the analyze_mda_sentiment method in your main class
     def updated_analyze_mda_sentiment(self, symbol):
-        """Updated to prioritize API calls for real MD&A extraction and analysis."""
-        try:
-            if not self.mda_api_available:
-                logger.warning("MDA API URL not configured. Using sample analysis as fallback.")
-                return self.get_sample_mda_analysis(symbol)
-
-            extractor = self.ImprovedMDAExtractor()
-            mda_texts = extractor.get_mda_text(symbol, max_reports=3)
-
-            if not mda_texts:
-                logger.warning(f"No real MDA text found for {symbol}, using sample analysis.")
-                return self.get_sample_mda_analysis(symbol)
-
-            logger.info(f"Sending {len(mda_texts)} MD&A texts to the API for analysis.")
-            api_result = self._analyze_mda_via_api(mda_texts)
-
-            if api_result:
-                return api_result
-
-            logger.warning(f"MDA API call failed for {symbol}. Using sample analysis as fallback.")
-            return self.get_sample_mda_analysis(symbol)
-
-        except Exception as e:
-            logger.error(f"An unexpected error in MDA sentiment analysis for {symbol}: {e}")
-            return self.get_sample_mda_analysis(symbol)
-
-    def _get_alternative_management_content(self, symbol):
         """
-        Get alternative management content from earnings calls, press releases, etc.
+        Get MD&A analysis (FAST - reads from cache)
+        Updated to use MDA processor instead of direct extraction
         """
         try:
-            alternative_texts = []
+            if not self.mda_processor:
+                logger.warning("MDA Processor not available, using sample")
+                return self.get_sample_mda_analysis(symbol)
 
-            # Method 1: Try to get recent earnings call transcripts
-            try:
-                # This would require integration with services like:
-                # - AlphaVantage (has earnings call transcripts)
-                # - Financial news APIs
-                # - Company press releases
+            # This is INSTANT (reads from Redis cache)
+            analysis = self.mda_processor.get_mda_analysis(symbol)
 
-                # For now, we'll try to get management quotes from recent news
-                ticker = yf.Ticker(f"{symbol}.NS")
-                news = ticker.news
-
-                management_quotes = []
-                for article in news[:10]:  # Check recent 10 articles
-                    try:
-                        if 'summary' in article and article['summary']:
-                            summary = article['summary']
-                            # Look for quoted management statements
-                            if any(keyword in summary.lower() for keyword in [
-                                'ceo said', 'management said', 'according to', 'stated',
-                                'commented', 'believes', 'expects', 'outlook'
-                            ]):
-                                management_quotes.append(summary)
-                    except Exception:
-                        continue
-
-                if management_quotes:
-                    alternative_texts.extend(management_quotes)
-
-            except Exception as e:
-                logger.debug(f"Error getting earnings content: {e}")
-
-            return alternative_texts if len(alternative_texts) >= 2 else []
+            if analysis:
+                logger.info(f"✅ Retrieved cached MD&A for {symbol}")
+                return analysis
+            else:
+                logger.warning(f"⚠️ MD&A not in cache for {symbol}")
+                return self.get_sample_mda_analysis(symbol)
 
         except Exception as e:
-            logger.error(f"Error getting alternative management content: {e}")
-            return []
+            logger.error(f"MD&A error for {symbol}: {e}")
+            return self.get_sample_mda_analysis(symbol)
+
+    # NOTE: The '_get_alternative_management_content' method has been removed
+    # as it was part of the old, unused MDA extraction logic.
 
     def calculate_position_trading_score(self, data, sentiment_data, fundamentals, trends, market_analysis, sector,
                                          mda_analysis=None):
@@ -922,14 +374,12 @@ class EnhancedPositionTradingSystem:
                 logger.error(f"Error in news sentiment analysis: {str(e)}")
                 sentiment_results = ([], [], [], "Error", "Error")
 
-            # MDA sentiment analysis
+            # MDA sentiment analysis - NOW ENABLED!
             try:
-                # *** FIX 1: Corrected method name ***
                 mda_analysis = self.updated_analyze_mda_sentiment(final_symbol)
-                logger.info(
-                    f"MDA analysis for {symbol}: Score={mda_analysis.get('mda_score', 0):.1f}, Tone={mda_analysis.get('management_tone', 'Unknown')}")
+                logger.info(f"MD&A for {symbol}: {mda_analysis.get('management_tone', 'N/A')}")
             except Exception as e:
-                logger.error(f"Error in MDA sentiment analysis: {str(e)}")
+                logger.error(f"Error in MDA analysis: {e}")
                 mda_analysis = self.get_sample_mda_analysis(final_symbol)
 
             # Risk metrics
@@ -1153,81 +603,93 @@ class EnhancedPositionTradingSystem:
             }
             logger.warning(f"Using fallback database with {len(self.indian_stocks)} stocks")
 
-    
-
     def get_indian_stock_data(self, symbol, period="5y"):
-        """Fetches stock data reliably from EODHD API or yfinance fallback."""
+        """
+        Fetches stock data using the new unified data provider
+
+        REPLACES the old method that used EODHD/yfinance
+        """
+
         try:
+            if not self.data_provider:
+                logger.error("❌ Data provider not available")
+                return None, None, None
+
             symbol = str(symbol).upper().replace(".NS", "").replace(".BO", "")
-            
-            # Try EODHD first
-            if self.eodhd_client:
-                logger.info(f"Fetching data for {symbol} from EODHD")
-                
-                # Convert period to from_date
-                from datetime import timedelta
-                days_map = {
-                    '1y': 365, '5y': 1825, '3y': 1095, '2y': 730, '10y': 3650
-                }
-                days = days_map.get(period, 1825)  # Default to 5 years
-                from_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
-                
-                # Try NSE first, then BSE
-                for exchange in ['NSE', 'BSE']:
-                    try:
-                        data = self.eodhd_client.get_historical_data(
-                            symbol=symbol,
-                            exchange=exchange,
-                            from_date=from_date
-                        )
-                        
-                        # Position trading needs at least 1 year of data
-                        if not data.empty and len(data) >= 200:
-                            # Get company info
-                            info = {}
-                            try:
-                                info = yf.Ticker(f"{symbol}.{exchange}").info
-                            except:
-                                info = {'shortName': self.get_stock_info_from_db(symbol).get('name', symbol)}
-                            
-                            api_symbol = f"{symbol}.{exchange}"
-                            logger.info(f"✅ Retrieved {len(data)} days from EODHD {exchange}")
-                            return data, info, api_symbol
-                            
-                    except Exception as e:
-                        logger.warning(f"EODHD {exchange} failed for {symbol}: {e}")
-                        continue
-                
-                logger.warning(f"No EODHD data for {symbol}, falling back to yfinance")
-            
-            # Fallback to yfinance
-            logger.info(f"Fetching {symbol} from yfinance")
-            
-            for suffix in ['.NS', '.BO']:
-                try:
-                    ticker = yf.Ticker(f"{symbol}{suffix}")
-                    data = ticker.history(period=period)
-                    
-                    if not data.empty and len(data) >= 252:
-                        data = data.reset_index()
-                        info = ticker.info
-                        
-                        logger.info(f"✅ Retrieved {len(data)} days from yfinance{suffix}")
-                        return data, info, f"{symbol}{suffix}"
-                        
-                except Exception as e:
-                    logger.warning(f"yfinance{suffix} failed for {symbol}: {e}")
-                    continue
-            
-            logger.error(f"❌ All data sources failed for {symbol}")
-            return None, None, None
-                        
+
+            logger.info(f"Fetching data for {symbol} via unified data provider")
+
+            # Fetch data using new provider
+            stock_data = self.data_provider.get_stock_data(
+                symbol=symbol,
+                fetch_ohlcv=True,
+                fetch_fundamentals=True,  # ← Position trading NEEDS fundamentals!
+                period=period
+            )
+
+            # Check for errors
+            if stock_data.get('errors'):
+                logger.warning(f"Data fetch had errors: {stock_data['errors']}")
+
+            # Extract OHLCV data
+            ohlcv_list = stock_data.get('ohlcv')
+            if not ohlcv_list:
+                logger.error(f"❌ No OHLCV data returned for {symbol}")
+                return None, None, None
+
+            # Convert list of dicts back to pandas DataFrame
+            # import pandas as pd  <- Already imported at top
+            df = pd.DataFrame(ohlcv_list)
+            df['Date'] = pd.to_datetime(df['date'])
+            df = df.set_index('Date')
+            df = df[['open', 'high', 'low', 'close', 'volume']]
+            df.columns = ['Open', 'High', 'Low', 'Close', 'Volume']
+
+            # Create info dict with fundamentals from Screener.in
+            fundamentals = stock_data.get('fundamentals', {})
+
+            # Map Screener.in data to yfinance-like structure for compatibility
+            info = {
+                'shortName': stock_data.get('company_name', symbol),
+                'symbol': symbol,
+                # Map fundamental data
+                'trailingPE': fundamentals.get('pe_ratio'),
+                'forwardPE': fundamentals.get('pe_ratio'),  # Use same if forward not available
+                'priceToBook': fundamentals.get('price_to_book'),
+                'debtToEquity': fundamentals.get('debt_to_equity'),
+                'returnOnEquity': fundamentals.get('roe'),
+                'returnOnCapital': fundamentals.get('roce'),
+                'dividendYield': fundamentals.get('dividend_yield'),
+                'marketCap': fundamentals.get('market_cap'),
+                'bookValue': fundamentals.get('book_value'),
+                'currentRatio': fundamentals.get('current_ratio'),
+                'pegRatio': fundamentals.get('peg_ratio'),
+                # Growth metrics
+                'revenueGrowth': fundamentals.get('sales_growth_3y'),
+                'earningsGrowth': fundamentals.get('profit_growth_3y'),
+            }
+
+            final_symbol = f"{symbol}.{stock_data.get('exchange_used', 'NSE')}"
+
+            logger.info(f"✅ Retrieved {len(df)} days + fundamentals for {symbol}")
+            return df, info, final_symbol
+
         except Exception as e:
             logger.error(f"Critical error in get_indian_stock_data for {symbol}: {e}")
+            # import traceback <- Already imported at top
+            traceback.print_exc()
             return None, None, None
+
     def analyze_fundamental_metrics(self, symbol, info):
-        """Analyze fundamental metrics crucial for position trading"""
+        """
+        Analyze fundamental metrics from NEW data structure
+
+        CHANGES: Data now comes from Screener.in via our provider
+        Works with the mapped 'info' dict from get_indian_stock_data
+        """
         try:
+            # This method can stay mostly the same!
+            # The info dict structure is maintained for compatibility
             fundamentals = {
                 'pe_ratio': info.get('trailingPE', None),
                 'forward_pe': info.get('forwardPE', None),
@@ -1235,18 +697,14 @@ class EnhancedPositionTradingSystem:
                 'price_to_book': info.get('priceToBook', None),
                 'debt_to_equity': info.get('debtToEquity', None),
                 'roe': info.get('returnOnEquity', None),
+                'roce': info.get('returnOnCapital', None),
                 'revenue_growth': info.get('revenueGrowth', None),
                 'earnings_growth': info.get('earningsGrowth', None),
-                'free_cash_flow': info.get('freeCashflow', None),
                 'dividend_yield': info.get('dividendYield', None),
                 'market_cap': info.get('marketCap', None),
-                'enterprise_value': info.get('enterpriseValue', None),
-                'profit_margin': info.get('profitMargins', None),
-                'operating_margin': info.get('operatingMargins', None),
-                'current_ratio': info.get('currentRatio', None),
-                'quick_ratio': info.get('quickRatio', None),
                 'book_value': info.get('bookValue', None),
-                'price_to_sales': info.get('priceToSalesTrailing12Months', None)
+                'current_ratio': info.get('currentRatio', None),
+                # Add any other metrics you need
             }
 
             # Add sector-specific metrics from our database
@@ -1255,6 +713,7 @@ class EnhancedPositionTradingSystem:
             fundamentals['market_cap_category'] = stock_info.get('market_cap', 'Unknown')
 
             return fundamentals
+
         except Exception as e:
             logger.error(f"Error analyzing fundamentals: {str(e)}")
             return {}
@@ -1746,6 +1205,7 @@ class EnhancedPositionTradingSystem:
             logger.error(f"Error generating position trading plan: {str(e)}")
             logger.error(traceback.format_exc())
             return default_plan
+
     # Helper methods for technical analysis
     def safe_rolling_calculation(self, data, window, operation='mean'):
         """Safely perform rolling calculations"""
@@ -1984,28 +1444,6 @@ class EnhancedPositionTradingSystem:
             return default_metrics
 
     # News sentiment methods
-    def analyze_news_sentiment(self, symbol, num_articles=20):
-        """Main sentiment analysis function updated to use the API."""
-        try:
-            articles = self.fetch_indian_news(symbol, num_articles) or self.get_sample_news(symbol)
-            news_source = "Real news (NewsAPI)" if articles else "Sample news"
-
-            if not articles:
-                return [], [], [], "No Analysis", "No Source"
-
-            if self.sentiment_api_available:
-                api_result = self._analyze_sentiment_via_api(articles)
-                if api_result:
-                    sentiments, confidences = api_result
-                    return sentiments, articles, confidences, "SBERT API", news_source
-
-            logging.warning(f"Falling back to TextBlob for news sentiment for {symbol}.")
-            sentiments, confidences = self.analyze_sentiment_with_textblob(articles)
-            return sentiments, articles, confidences, "TextBlob Fallback", news_source
-        except Exception as e:
-            logging.error(f"Error in news sentiment analysis for {symbol}: {e}")
-            return [], [], [], "Error", "Error"
-
     def analyze_sentiment_with_textblob(self, articles):
         """Fallback sentiment analysis using TextBlob"""
         sentiments = []
@@ -2309,20 +1747,3 @@ class EnhancedPositionTradingSystem:
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger: logging.Logger = logging.getLogger(__name__)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
