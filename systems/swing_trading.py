@@ -6,21 +6,19 @@ from typing import Dict, List
 import requests
 import numpy as np
 import pandas as pd
+from pandas.tseries.offsets import DateOffset  # <-- Add this
+import traceback  # <-- Add this
 from textblob import TextBlob
-
-# Use our custom EODHD wrapper instead of the broken package
-from eodhd_wrapper import EODHDClient
-
-import yfinance as yf  # Keep as fallback
+# from eodhd_wrapper import EODHDClient  # <-- No longer needed
+# import yfinance as yf  # <-- No longer needed
 import config
 from hf_utils import query_hf_api
-
 warnings.filterwarnings('ignore')
 logger = logging.getLogger(__name__)
 
 
 class EnhancedSwingTradingSystem:
-    def __init__(self):
+    def __init__(self, data_provider=None):  # ← ADD THIS PARAMETER
         try:
             self.news_api_key = config.NEWS_API_KEY
             self.swing_trading_params = config.SWING_TRADING_PARAMS
@@ -32,17 +30,23 @@ class EnhancedSwingTradingSystem:
             self.model_api_available = bool(self.sentiment_api_url)
             self.model_type = "SBERT API" if self.model_api_available else "TextBlob"
             
-            # --- EODHD API Setup ---
-            try:
-                self.eodhd_client = EODHDClient()
-                logger.info("✅ EODHD Client initialized successfully")
-            except Exception as e:
-                logger.warning(f"⚠️ EODHD initialization failed: {e}. Will use yfinance as fallback")
-                self.eodhd_client = None
+            # --- NEW: Store injected data provider ---
+            self.data_provider = data_provider
+            if data_provider:
+                logger.info("✅ Data provider injected into SwingTradingSystem")
+            else:
+                logger.warning("⚠️ No data provider provided - data fetching will fail")
+            
+            # --- REMOVE ALL THIS EODHD CODE ---
+            # try:
+            #     self.eodhd_client = EODHDClient()
+            #     logger.info("✅ EODHD Client initialized successfully")
+            # except Exception as e:
+            #     logger.warning(f"⚠️ EODHD initialization failed: {e}. Will use yfinance as fallback")
+            #     self.eodhd_client = None
             
             logger.info("✅ EnhancedSwingTradingSystem initialized successfully")
             
-
         except Exception as e:
             logger.error(f"❌ Error initializing EnhancedSwingTradingSystem: {e}")
             raise
@@ -357,50 +361,58 @@ class EnhancedSwingTradingSystem:
 
 
     def get_indian_stock_data(self, symbol, period="6mo"):
-        """Fetches stock data reliably from EODHD API or yfinance fallback."""
-        try:
-            symbol = str(symbol).upper().replace(".NS", "").replace(".BO", "")
-
-            # Try EODHD first
-            if self.eodhd_client:
-                logger.info(f"Fetching data for {symbol} from EODHD")
-                for exchange in ['NSE', 'BSE']:
-                    try:
-                        data = self.eodhd_client.get_historical_data(
-                            symbol=symbol,
-                            exchange=exchange,
-                            period=period
-                        )
-                        if not data.empty and len(data) >= 30:
-                            info = {'shortName': self.get_stock_info_from_db(symbol).get('name', symbol)}
-                            api_symbol = f"{symbol}.{exchange}"
-                            logger.info(f"✅ Retrieved {len(data)} days from EODHD {exchange}")
-                            return data, info, api_symbol
-                    except Exception as e:
-                        logger.warning(f"EODHD {exchange} failed for {symbol}: {e}")
-                        continue
-                logger.warning(f"No EODHD data for {symbol}, falling back to yfinance")
-
-            # Fallback to yfinance
-            logger.info(f"Fetching {symbol} from yfinance")
-            for suffix in ['.NS', '.BO']:
-                try:
-                    ticker = yf.Ticker(f"{symbol}{suffix}")
-                    data = ticker.history(period=period)
-                    if not data.empty and len(data) >= 30:
-                        info = {'shortName': self.get_stock_info_from_db(symbol).get('name', symbol)}
-                        logger.info(f"✅ Retrieved {len(data)} days from yfinance{suffix}")
-                        return data, info, f"{symbol}{suffix}"
-                except Exception as e:
-                    logger.warning(f"yfinance{suffix} failed for {symbol}: {e}")
-                    continue
-
-            logger.error(f"❌ All data sources failed for {symbol}")
+    
+    try:
+        if not self.data_provider:
+            logger.error("❌ Data provider not available")
             return None, None, None
-
-        except Exception as e:
-            logger.error(f"Critical error in get_indian_stock_data for {symbol}: {e}")
+        
+        symbol = str(symbol).upper().replace(".NS", "").replace(".BO", "")
+        
+        logger.info(f"Fetching data for {symbol} via unified data provider")
+        
+        # Fetch data using new provider
+        stock_data = self.data_provider.get_stock_data(
+            symbol=symbol,
+            fetch_ohlcv=True,
+            fetch_fundamentals=False,  # Not needed for swing trading
+            period=period
+        )
+        
+        # Check for errors
+        if stock_data.get('errors'):
+            logger.warning(f"Data fetch had errors: {stock_data['errors']}")
+        
+        # Extract OHLCV data
+        ohlcv_list = stock_data.get('ohlcv')
+        if not ohlcv_list:
+            logger.error(f"❌ No OHLCV data returned for {symbol}")
             return None, None, None
+        
+        # Convert list of dicts back to pandas DataFrame
+        import pandas as pd
+        df = pd.DataFrame(ohlcv_list)
+        df['Date'] = pd.to_datetime(df['date'])
+        df = df.set_index('Date')
+        df = df[['open', 'high', 'low', 'close', 'volume']]
+        df.columns = ['Open', 'High', 'Low', 'Close', 'Volume']  # Capitalize for consistency
+        
+        # Create info dict
+        info = {
+            'shortName': stock_data.get('company_name', symbol),
+            'symbol': symbol
+        }
+        
+        final_symbol = f"{symbol}.{stock_data.get('exchange_used', 'NSE')}"
+        
+        logger.info(f"✅ Retrieved {len(df)} days for {symbol} from new data provider")
+        return df, info, final_symbol
+        
+    except Exception as e:
+        logger.error(f"Critical error in get_indian_stock_data for {symbol}: {e}")
+        import traceback
+        traceback.print_exc()
+        return None, None, None
     def safe_rolling_calculation(self, data, window, operation='mean'):
         """Safely perform rolling calculations with error handling"""
         try:
@@ -1639,6 +1651,7 @@ class EnhancedSwingTradingSystem:
         except Exception as e:
             logger.error(f"Error printing analysis summary: {str(e)}")
             print(f"Error generating analysis summary: {str(e)}")
+
 
 
 
