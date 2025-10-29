@@ -351,16 +351,20 @@ class EnhancedPositionTradingSystem:
             # 1. Unpack OHLCV data into DataFrame
             ohlcv_list = stock_data.get('ohlcv')
             if not ohlcv_list:
-                logger.error(f"No OHLCV data returned from provider for {symbol}")
-                return None
+                 logger.error(f"No OHLCV data returned from provider for {symbol}")
+                 return None
             try:
-                data = pd.DataFrame(ohlcv_list)
-                # Convert 'date' string column to datetime objects and set as index
-                data['Date'] = pd.to_datetime(data['date']) 
-                data = data.set_index('Date').drop(columns=['date'])
+                 data = pd.DataFrame(ohlcv_list)
+                 data['Date'] = pd.to_datetime(data['date'])
+                 data = data.set_index('Date').drop(columns=['date'])
+
+                 # ----> ADD THIS LINE <----
+                 data.rename(columns={'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'}, inplace=True)
+                 # ----> NOW COLUMNS ARE CORRECT <----
+
             except Exception as e:
-                logger.error(f"Could not process OHLCV data for {symbol}: {e}")
-                return None
+                 logger.error(f"Could not process OHLCV data for {symbol}: {e}")
+                 return None
             
             # 2. Unpack fundamentals directly
             fundamentals = stock_data.get('fundamentals', {})
