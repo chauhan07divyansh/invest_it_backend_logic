@@ -34,3 +34,9 @@ huggingface-hub==0.24.6
 textblob==0.17.1
 backoff
 redis
+nsepython
+lxml
+selenium
+bs4
+fyers-apiv3
+
