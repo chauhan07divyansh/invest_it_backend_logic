@@ -17,26 +17,16 @@ logger = logging.getLogger(__name__)
 
 
 class FyersProvider:
-    """Handles all Fyers API V3 interactions for OHLCV data with retry logic"""
+    """Handles all Fyers API V3 interactions for OHLCV data with retry logic and pagination"""
 
     def __init__(self, app_id: str, access_token: str):
-        """
-        Initialize Fyers provider
-
-        Args:
-            app_id: Fyers App ID
-            access_token: Fyers Access Token (generated via OAuth)
-        """
         self.app_id = app_id
         self.access_token = access_token
-
-        # Initialize Fyers session
         self.fyers = fyersModel.FyersModel(
             client_id=app_id,
             token=access_token,
             log_path=os.getenv('FYERS_LOG_PATH', '')
         )
-
         logger.info("✅ FyersProvider initialized successfully")
 
     @backoff.on_exception(
@@ -50,26 +40,15 @@ class FyersProvider:
             symbol: str,
             exchange: str = 'NSE',
             period: str = '6mo',
-            resolution: str = 'D'
+            resolution: str = 'D' # Note: Fyers uses 'D' for 1 Day
     ) -> Optional[pd.DataFrame]:
         """
-        Fetch historical OHLCV data from Fyers API
-
-        Args:
-            symbol: Stock symbol (e.g., 'RELIANCE')
-            exchange: Exchange (NSE or BSE)
-            period: Time period (e.g., '6mo', '1y', '5y')
-            resolution: Data resolution ('D' for daily, '1' for 1min, etc.)
-
-        Returns:
-            DataFrame with OHLCV data or None if failed
+        Public-facing method to fetch historical OHLCV data.
+        This function calculates the date range and calls the paginated fetcher.
         """
         try:
-            # Convert symbol to Fyers format: NSE:SYMBOL-EQ or BSE:SYMBOL-EQ
-            fyers_symbol = f"{exchange}:{symbol}-EQ"
-
-            # Calculate date range
-            to_date = datetime.now()
+            # 1. Calculate date range
+            to_date = datetime.now().date()
             period_map = {
                 '1mo': 30, '3mo': 90, '6mo': 180, '1y': 365,
                 '2y': 730, '3y': 1095, '5y': 1825, '10y': 3650
@@ -77,44 +56,120 @@ class FyersProvider:
             days = period_map.get(period, 180)
             from_date = to_date - timedelta(days=days)
 
-            # Prepare data request
-            data_request = {
-                "symbol": fyers_symbol,
-                "resolution": resolution,
-                "date_format": "1",  # Unix timestamp
-                "range_from": from_date.strftime('%Y-%m-%d'),
-                "range_to": to_date.strftime('%Y-%m-%d'),
-                "cont_flag": "1"
-            }
+            # 2. Convert symbol to Fyers format
+            fyers_symbol = f"{exchange}:{symbol}-EQ"
 
-            logger.info(f"Fetching Fyers data for {fyers_symbol} from {from_date.date()} to {to_date.date()}")
+            # 3. Call the paginated fetcher
+            df = self.fetch_paginated_history(
+                symbol=fyers_symbol,
+                resolution=resolution,
+                start_date=from_date,
+                end_date=to_date
+            )
 
-            # Make API call
-            response = self.fyers.history(data_request)
-
-            if response.get('s') != 'ok':
-                error_msg = response.get('message', 'Unknown error')
-                logger.error(f"Fyers API error for {fyers_symbol}: {error_msg}")
-                return None
-
-            # Parse response
-            candles = response.get('candles', [])
-            if not candles:
+            if df is None or df.empty:
                 logger.warning(f"No data returned from Fyers for {fyers_symbol}")
                 return None
-
-            # Convert to DataFrame
-            df = pd.DataFrame(candles, columns=['timestamp', 'Open', 'High', 'Low', 'Close', 'Volume'])
-            df['Date'] = pd.to_datetime(df['timestamp'], unit='s')
-            df = df.drop('timestamp', axis=1)
-            df = df.set_index('Date')
 
             logger.info(f"✅ Retrieved {len(df)} rows from Fyers for {fyers_symbol}")
             return df
 
         except Exception as e:
-            logger.error(f"Error fetching Fyers data for {symbol}: {e}")
+            logger.error(f"Error in get_historical_data for {symbol}: {e}")
             return None
+
+    def fetch_paginated_history(
+            self,
+            symbol: str,
+            resolution: str,
+            start_date: date,
+            end_date: date
+    ) -> Optional[pd.DataFrame]:
+        """
+        Fetches historical data by paginating requests in 365-day chunks.
+        """
+        all_candles_data = []
+        current_start_dt = start_date
+
+        while current_start_dt < end_date:
+            # 1. Calculate the end of this chunk (365 days)
+            chunk_end_dt = current_start_dt + timedelta(days=365)
+
+            # 2. Cap the chunk's end date at the final end_date
+            if chunk_end_dt > end_date:
+                chunk_end_dt = end_date
+
+            # 3. Format dates for the API request
+            range_from = current_start_dt.strftime('%Y-%m-%d')
+            range_to = chunk_end_dt.strftime('%Y-%m-%d')
+
+            logger.info(f"Fyers Fetch: Requesting {symbol} from {range_from} to {range_to}")
+
+            # 4. Create the Fyers API payload
+            payload = {
+                "symbol": symbol,
+                "resolution": resolution,
+                "date_format": "1",  # 1 = YYYY-MM-DD
+                "range_from": range_from,
+                "range_to": range_to,
+                "cont_flag": "1"
+            }
+
+            try:
+                response = self.fyers.history(data=payload)
+
+                if response.get('s') == 'ok' and response.get('candles'):
+                    all_candles_data.extend(response['candles'])
+                elif response.get('s') == 'no_data':
+                    logger.warning(f"Fyers Fetch: No data for {symbol} in range {range_from} to {range_to}.")
+                else:
+                    error_msg = response.get('message', 'Unknown error')
+                    logger.error(f"Fyers API error for {symbol}: {error_msg}")
+                    # If one chunk fails (e.g., "Invalid input"), stop trying.
+                    if 'Invalid' in error_msg:
+                        logger.critical(f"Stopping pagination due to invalid request: {payload}")
+                        break
+            
+            except Exception as e:
+                logger.error(f"Fyers Fetch: Exception during API call for {symbol}: {e}")
+                break  # Stop trying if a critical exception occurs
+            
+            # 5. Set the start of the *next* loop
+            current_start_dt = chunk_end_dt + timedelta(days=1)
+            
+            # 6. IMPORTANT: Add a small delay to avoid hitting API rate limits
+            time.sleep(0.5) # 500ms delay
+
+        if not all_candles_data:
+            return None
+
+        # 7. Convert the final list of lists into a DataFrame
+        try:
+            df = pd.DataFrame(all_candles_data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            df['Date'] = pd.to_datetime(df['timestamp'], unit='s')
+            df = df.drop(columns=['timestamp'])
+            
+            # Rename columns to match your StockDataProvider's expectations
+            df.rename(columns={
+                'open': 'Open',
+                'high': 'High',
+                'low': 'Low',
+                'close': 'Close',
+                'volume': 'Volume'
+            }, inplace=True)
+
+            df = df.set_index('Date')
+            
+            # Remove any duplicate dates (can happen at the seams) and sort
+            df = df[~df.index.duplicated(keep='first')]
+            df = df.sort_index()
+            
+            return df
+            
+        except Exception as e:
+            logger.error(f"Fyers Fetch: Failed to create DataFrame for {symbol}. Error: {e}")
+            return None
+    
 
 
 class ScreenerProvider:
@@ -464,4 +519,5 @@ class StockDataProvider:
         except Exception as e:
             logger.error(f"Error in get_stock_data for {symbol}: {e}")
             result['errors'].append(str(e))
+
             return result
