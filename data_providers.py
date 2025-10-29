@@ -2,7 +2,7 @@ import os
 import logging
 import time
 from typing import Dict, List, Optional, Any
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta,date
 import requests
 from bs4 import BeautifulSoup
 import backoff
@@ -521,3 +521,4 @@ class StockDataProvider:
             result['errors'].append(str(e))
 
             return result
+
