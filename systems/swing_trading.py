@@ -13,6 +13,7 @@ from textblob import TextBlob
 # import yfinance as yf  # <-- No longer needed
 import config
 from hf_utils import query_hf_api
+
 warnings.filterwarnings('ignore')
 logger = logging.getLogger(__name__)
 
@@ -29,14 +30,14 @@ class EnhancedSwingTradingSystem:
             self.sentiment_api_url = config.HF_SENTIMENT_API_URL
             self.model_api_available = bool(self.sentiment_api_url)
             self.model_type = "SBERT API" if self.model_api_available else "TextBlob"
-            
+
             # --- NEW: Store injected data provider ---
             self.data_provider = data_provider
             if data_provider:
                 logger.info("✅ Data provider injected into SwingTradingSystem")
             else:
                 logger.warning("⚠️ No data provider provided - data fetching will fail")
-            
+
             # --- REMOVE ALL THIS EODHD CODE ---
             # try:
             #     self.eodhd_client = EODHDClient()
@@ -44,13 +45,13 @@ class EnhancedSwingTradingSystem:
             # except Exception as e:
             #     logger.warning(f"⚠️ EODHD initialization failed: {e}. Will use yfinance as fallback")
             #     self.eodhd_client = None
-            
+
             logger.info("✅ EnhancedSwingTradingSystem initialized successfully")
-            
+
         except Exception as e:
             logger.error(f"❌ Error initializing EnhancedSwingTradingSystem: {e}")
             raise
-            
+
     def _validate_trading_params(self):
         """Validate trading parameters"""
         try:
@@ -299,7 +300,6 @@ class EnhancedSwingTradingSystem:
             self.model_type = "TextBlob"
             self.sentiment_pipeline = None
 
-
     def get_sector_weights(self, sector):
         """Get dynamic weights based on sector for swing trading with error handling"""
         try:
@@ -357,62 +357,60 @@ class EnhancedSwingTradingSystem:
             logger.error(f"Error getting sector weights for {sector}: {str(e)}")
             return 0.55, 0.45  # Default weights
 
-        
-
-
     def get_indian_stock_data(self, symbol, period="6mo"):
-    
-    try:
-        if not self.data_provider:
-            logger.error("❌ Data provider not available")
+
+        try:
+            if not self.data_provider:
+                logger.error("❌ Data provider not available")
+                return None, None, None
+
+            symbol = str(symbol).upper().replace(".NS", "").replace(".BO", "")
+
+            logger.info(f"Fetching data for {symbol} via unified data provider")
+
+            # Fetch data using new provider
+            stock_data = self.data_provider.get_stock_data(
+                symbol=symbol,
+                fetch_ohlcv=True,
+                fetch_fundamentals=False,  # Not needed for swing trading
+                period=period
+            )
+
+            # Check for errors
+            if stock_data.get('errors'):
+                logger.warning(f"Data fetch had errors: {stock_data['errors']}")
+
+            # Extract OHLCV data
+            ohlcv_list = stock_data.get('ohlcv')
+            if not ohlcv_list:
+                logger.error(f"❌ No OHLCV data returned for {symbol}")
+                return None, None, None
+
+            # Convert list of dicts back to pandas DataFrame
+            import pandas as pd
+            df = pd.DataFrame(ohlcv_list)
+            df['Date'] = pd.to_datetime(df['date'])
+            df = df.set_index('Date')
+            df = df[['open', 'high', 'low', 'close', 'volume']]
+            df.columns = ['Open', 'High', 'Low', 'Close', 'Volume']  # Capitalize for consistency
+
+            # Create info dict
+            info = {
+                'shortName': stock_data.get('company_name', symbol),
+                'symbol': symbol
+            }
+
+            final_symbol = f"{symbol}.{stock_data.get('exchange_used', 'NSE')}"
+
+            logger.info(f"✅ Retrieved {len(df)} days for {symbol} from new data provider")
+            return df, info, final_symbol
+
+        except Exception as e:
+            logger.error(f"Critical error in get_indian_stock_data for {symbol}: {e}")
+            import traceback
+            traceback.print_exc()
             return None, None, None
-        
-        symbol = str(symbol).upper().replace(".NS", "").replace(".BO", "")
-        
-        logger.info(f"Fetching data for {symbol} via unified data provider")
-        
-        # Fetch data using new provider
-        stock_data = self.data_provider.get_stock_data(
-            symbol=symbol,
-            fetch_ohlcv=True,
-            fetch_fundamentals=False,  # Not needed for swing trading
-            period=period
-        )
-        
-        # Check for errors
-        if stock_data.get('errors'):
-            logger.warning(f"Data fetch had errors: {stock_data['errors']}")
-        
-        # Extract OHLCV data
-        ohlcv_list = stock_data.get('ohlcv')
-        if not ohlcv_list:
-            logger.error(f"❌ No OHLCV data returned for {symbol}")
-            return None, None, None
-        
-        # Convert list of dicts back to pandas DataFrame
-        import pandas as pd
-        df = pd.DataFrame(ohlcv_list)
-        df['Date'] = pd.to_datetime(df['date'])
-        df = df.set_index('Date')
-        df = df[['open', 'high', 'low', 'close', 'volume']]
-        df.columns = ['Open', 'High', 'Low', 'Close', 'Volume']  # Capitalize for consistency
-        
-        # Create info dict
-        info = {
-            'shortName': stock_data.get('company_name', symbol),
-            'symbol': symbol
-        }
-        
-        final_symbol = f"{symbol}.{stock_data.get('exchange_used', 'NSE')}"
-        
-        logger.info(f"✅ Retrieved {len(df)} days for {symbol} from new data provider")
-        return df, info, final_symbol
-        
-    except Exception as e:
-        logger.error(f"Critical error in get_indian_stock_data for {symbol}: {e}")
-        import traceback
-        traceback.print_exc()
-        return None, None, None
+
     def safe_rolling_calculation(self, data, window, operation='mean'):
         """Safely perform rolling calculations with error handling"""
         try:
@@ -437,7 +435,6 @@ class EnhancedSwingTradingSystem:
         except Exception as e:
             logger.error(f"Error in safe_rolling_calculation: {str(e)}")
             return pd.Series([np.nan] * len(data), index=data.index if hasattr(data, 'index') else range(len(data)))
-
 
     def calculate_bollinger_bands(self, prices, period=20, std_dev=2):
         """Calculate Bollinger Bands with comprehensive error handling"""
@@ -467,7 +464,6 @@ class EnhancedSwingTradingSystem:
             nan_series = pd.Series([np.nan] * len(prices),
                                    index=prices.index if hasattr(prices, 'index') else range(len(prices)))
             return nan_series, nan_series, nan_series
-
 
     def calculate_stochastic(self, high, low, close, k_period=14, d_period=3):
         """Calculate Stochastic Oscillator with error handling"""
@@ -501,7 +497,6 @@ class EnhancedSwingTradingSystem:
             nan_series = pd.Series([np.nan] * len(close),
                                    index=close.index if hasattr(close, 'index') else range(len(close)))
             return nan_series, nan_series
-
 
     def calculate_support_resistance(self, data, window=20):
         """Calculate support and resistance levels with error handling"""
@@ -559,7 +554,6 @@ class EnhancedSwingTradingSystem:
             except:
                 return None, None
 
-
     def calculate_volume_profile(self, data, bins=20):
         """Calculate Volume Profile with error handling"""
         try:
@@ -610,7 +604,6 @@ class EnhancedSwingTradingSystem:
             logger.error(f"Error calculating volume profile: {str(e)}")
             return None, None
 
-
     def calculate_rsi(self, prices, period=14):
         """Calculate RSI with comprehensive error handling"""
         try:
@@ -643,7 +636,6 @@ class EnhancedSwingTradingSystem:
             logger.error(f"Error calculating RSI: {str(e)}")
             return pd.Series([50] * len(prices), index=prices.index if hasattr(prices, 'index') else range(len(prices)))
 
-
     def calculate_macd(self, prices, fast=12, slow=26, signal=9):
         """Calculate MACD with error handling"""
         try:
@@ -673,7 +665,6 @@ class EnhancedSwingTradingSystem:
             zeros = pd.Series([0] * len(prices), index=prices.index if hasattr(prices, 'index') else range(len(prices)))
             return zeros, zeros, zeros
 
-
     def calculate_atr(self, high, low, close, period=14):
         """Calculate Average True Range with error handling"""
         try:
@@ -695,7 +686,6 @@ class EnhancedSwingTradingSystem:
         except Exception as e:
             logger.error(f"Error calculating ATR: {str(e)}")
             return pd.Series([np.nan] * len(close), index=close.index if hasattr(close, 'index') else range(len(close)))
-
 
     def fetch_indian_news(self, symbol, num_articles=15):
         """Fetch news for Indian companies with error handling"""
@@ -731,7 +721,6 @@ class EnhancedSwingTradingSystem:
             logger.error(f"Error fetching news for {symbol}: {str(e)}")
             return None
 
-
     def get_sample_news(self, symbol):
         """Generate sample news for demonstration with error handling"""
         try:
@@ -759,7 +748,6 @@ class EnhancedSwingTradingSystem:
         except Exception as e:
             logger.error(f"Error generating sample news for {symbol}: {str(e)}")
             return [f"Market analysis for {symbol}", f"Investment opportunity in {symbol}"]
-
 
     def _analyze_sentiment_via_api(self, articles: list) -> tuple[list, list] | None:
         """Analyzes sentiment by calling the remote SBERT Hugging Face API."""
@@ -811,7 +799,6 @@ class EnhancedSwingTradingSystem:
 
         return sentiments, confidences
 
-
     def analyze_news_sentiment(self, symbol, num_articles=15):
         """Main sentiment analysis function updated to use the API."""
         try:
@@ -825,14 +812,13 @@ class EnhancedSwingTradingSystem:
                 if api_result:
                     sentiments, confidences = api_result
                     return sentiments, articles, confidences, "SBERT API", news_source
-            
+
             logging.warning(f"Falling back to TextBlob for news sentiment for {symbol}.")
             sentiments, confidences = self.analyze_sentiment_with_textblob(articles)
             return sentiments, articles, confidences, "TextBlob Fallback", news_source
         except Exception as e:
             logger.error(f"Error in news sentiment analysis for {symbol}: {e}")
             return [], [], [], "Error", "Error"
-
 
     def calculate_swing_trading_score(self, data, sentiment_data, sector):
         """Calculate comprehensive swing trading score with error handling"""
@@ -996,7 +982,6 @@ class EnhancedSwingTradingSystem:
         except Exception as e:
             logger.error(f"Error calculating swing trading score: {str(e)}")
             return 0
-
 
     def calculate_risk_metrics(self, data):
         """Calculate risk management metrics with comprehensive error handling"""
@@ -1280,7 +1265,6 @@ class EnhancedSwingTradingSystem:
             logger.error(traceback.format_exc())
             return None
 
-
     def analyze_multiple_stocks(self, symbols, period="6mo"):
         """Analyze multiple stocks with progress tracking and comprehensive error handling"""
         results = []
@@ -1334,7 +1318,6 @@ class EnhancedSwingTradingSystem:
         logger.info(f"Analysis completed: {successful_analyses} successful, {failed_analyses} failed")
 
         return results
-
 
     def filter_stocks_by_risk_appetite(self, results, risk_appetite):
         """Filter stocks based on user's risk appetite with error handling"""
@@ -1611,7 +1594,6 @@ class EnhancedSwingTradingSystem:
             logger.error(f"Error getting single best recommendation: {str(e)}")
             return None
 
-
     def print_analysis_summary(self, all_results, filtered_results, risk_appetite, total_budget):
         """Print comprehensive analysis summary with error handling"""
         try:
@@ -1651,6 +1633,7 @@ class EnhancedSwingTradingSystem:
         except Exception as e:
             logger.error(f"Error printing analysis summary: {str(e)}")
             print(f"Error generating analysis summary: {str(e)}")
+
 
 
 
