@@ -579,11 +579,7 @@ class EnhancedPositionTradingSystem:
             logger.warning(f"Using fallback database with {len(self.indian_stocks)} stocks")
 
 
-    # ==============================================================================
-    #  REMOVED OBSOLETE METHODS
-    # ==============================================================================
-    # - get_indian_stock_data()  <- REMOVED
-    # - analyze_fundamental_metrics() <- REMOVED
+   
 
 
     # ==============================================================================
@@ -591,8 +587,6 @@ class EnhancedPositionTradingSystem:
     # ==============================================================================
     def calculate_fundamental_score(self, fundamentals, sector):
         """Calculate fundamental score based on provided fundamentals dict."""
-        # --- THIS METHOD REMAINS THE SAME ---
-        # It now receives the 'fundamentals' dict directly from the data provider
         try:
             score = 0
             max_score = 100
@@ -603,6 +597,7 @@ class EnhancedPositionTradingSystem:
                 if 8 < pe_ratio < 25: score += 15
                 elif 5 < pe_ratio <= 8: score += 12
                 elif 25 <= pe_ratio < 35: score += 8
+                # Note: P/E > 35 gets 0 points, which is why MARUTI gets a low score.
 
             # PEG Ratio
             peg_ratio = fundamentals.get('peg_ratio')
@@ -615,13 +610,13 @@ class EnhancedPositionTradingSystem:
             earn_g = fundamentals.get('earnings_growth') or fundamentals.get('profit_growth_3y')
 
             if isinstance(rev_g, (int, float)):
-                 rev_g_pct = rev_g / 100 if abs(rev_g) > 1 else rev_g # Assume > 1 means percentage
+                 rev_g_pct = rev_g / 100.0  # <-- CORRECTED
                  if rev_g_pct > 0.20: score += 10
                  elif rev_g_pct > 0.15: score += 8
                  elif rev_g_pct > 0.10: score += 5
                  
             if isinstance(earn_g, (int, float)):
-                 earn_g_pct = earn_g / 100 if abs(earn_g) > 1 else earn_g
+                 earn_g_pct = earn_g / 100.0  # <-- CORRECTED
                  if earn_g_pct > 0.25: score += 10
                  elif earn_g_pct > 0.15: score += 8
                  elif earn_g_pct > 0.10: score += 5
@@ -629,43 +624,44 @@ class EnhancedPositionTradingSystem:
             # ROE
             roe = fundamentals.get('roe')
             if isinstance(roe, (int, float)):
-                 roe_pct = roe / 100 if abs(roe) > 1 else roe
+                 roe_pct = roe / 100.0  # <-- CORRECTED
                  if roe_pct > 0.20: score += 10
                  elif roe_pct > 0.15: score += 8
                  elif roe_pct > 0.12: score += 5
 
-            # Debt to Equity
+            # Debt to Equity (This is a ratio, not a percentage, so it's OK)
             debt_equity = fundamentals.get('debt_to_equity')
             if isinstance(debt_equity, (int, float)):
                  if debt_equity < 0.3: score += 10
                  elif debt_equity < 0.6: score += 8
                  elif debt_equity < 1.0: score += 4
 
-            # Profitability (assuming these might be percentages directly)
+            # Profitability
             profit_margin = fundamentals.get('profit_margin')
             op_margin = fundamentals.get('operating_margin')
+            
             if isinstance(profit_margin, (int, float)):
-                 pm_pct = profit_margin / 100 if abs(profit_margin) > 1 else profit_margin
+                 pm_pct = profit_margin / 100.0  # <-- CORRECTED
                  if pm_pct > 0.15: score += 5
                  elif pm_pct > 0.10: score += 3
                  
             if isinstance(op_margin, (int, float)):
-                 opm_pct = op_margin / 100 if abs(op_margin) > 1 else op_margin
+                 opm_pct = op_margin / 100.0  # <-- CORRECTED
                  if opm_pct > 0.20: score += 5
                  elif opm_pct > 0.15: score += 3
-
 
             # Dividend Yield
             div_yield = fundamentals.get('dividend_yield') or fundamentals.get('expected_div_yield', 0)
             if isinstance(div_yield, (int, float)):
-                 div_yield_pct = div_yield / 100 if abs(div_yield) > 1 else div_yield
+                 div_yield_pct = div_yield / 100.0  # <-- CORRECTED
                  if div_yield_pct > 0.03: score += 10
                  elif div_yield_pct > 0.015: score += 6
                  elif div_yield_pct > 0.005: score += 3
 
-            # Financial Health
+            # Financial Health (Ratios, not percentages, so they are OK)
             current_ratio = fundamentals.get('current_ratio')
-            pb_ratio = fundamentals.get('price_to_book') or fundamentals.get('priceToBook') # Add alias
+            pb_ratio = fundamentals.get('price_to_book') or fundamentals.get('priceToBook')
+            
             if isinstance(current_ratio, (int, float)):
                  if current_ratio > 1.5: score += 5
                  elif current_ratio > 1.2: score += 3
@@ -674,8 +670,8 @@ class EnhancedPositionTradingSystem:
                  if pb_ratio < 2.0: score += 5
                  elif pb_ratio < 3.0: score += 3
 
-
             return min(score, max_score)
+        
         except Exception as e:
             logger.error(f"Error calculating fundamental score: {e}")
             return 0
@@ -1484,3 +1480,4 @@ if __name__ == "__main__":
     # except Exception as e:
     #      print(f"An error occurred during test: {e}")
     #      traceback.print_exc()
+
