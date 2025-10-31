@@ -2,7 +2,7 @@ import os
 import logging
 import time
 from typing import Dict, List, Optional, Any
-from datetime import datetime, timedelta,date
+from datetime import datetime, timedelta, date
 import requests
 from bs4 import BeautifulSoup
 import backoff
@@ -178,7 +178,6 @@ class ScreenerProvider:
     def __init__(self, delay_seconds: float = 1.5):
         """
         Initialize Screener.in scraper
-
         Args:
             delay_seconds: Delay between requests to be polite
         """
@@ -214,47 +213,52 @@ class ScreenerProvider:
     )
     def get_fundamentals(self, company_slug: str) -> Optional[Dict[str, Any]]:
         """
-        Scrape fundamental data from Screener.in
-
-        Args:
-            company_slug: Company name slug (e.g., 'reliance-industries')
-
-        Returns:
-            Dictionary with fundamental metrics or None if failed
+        Scrape fundamental data from Screener.in's CONSOLIDATED page.
         """
         try:
             self._rate_limit()
 
-            url = f"{self.base_url}/{company_slug}/"
-            logger.info(f"Scraping Screener.in for {company_slug}")
+            # --- FIX 1: Explicitly request the 'consolidated' page ---
+            url = f"{self.base_url}/{company_slug}/consolidated/"
+            logger.info(f"Scraping Screener.in for {company_slug} at {url}")
 
             response = self.session.get(url, timeout=15)
             response.raise_for_status()
 
             soup = BeautifulSoup(response.content, 'lxml')
 
+            # --- This is your original dictionary, it's correct ---
             fundamentals = {
-                'pe_ratio': None,
-                'market_cap': None,
-                'book_value': None,
-                'dividend_yield': None,
-                'roe': None,
-                'roce': None,
-                'debt_to_equity': None,
-                'eps': None,
-                'sales_growth_3y': None,
-                'profit_growth_3y': None,
-                'stock_pe': None,
-                'peg_ratio': None,
-                'price_to_book': None,
-                'current_ratio': None,
-                'face_value': None,
+                'pe_ratio': None, 'market_cap': None, 'book_value': None,
+                'dividend_yield': None, 'roe': None, 'roce': None,
+                'debt_to_equity': None, 'eps': None, 'sales_growth_3y': None,
+                'profit_growth_3y': None, 'stock_pe': None, 'peg_ratio': None,
+                'price_to_book': None, 'current_ratio': None, 'face_value': None,
                 'promoter_holding': None
             }
+            # --- This is your original map, it's also correct ---
+            field_map = {
+                'Market Cap': 'market_cap', 'Stock P/E': 'pe_ratio',
+                'Book Value': 'book_value', 'Dividend Yield': 'dividend_yield',
+                'ROCE': 'roce', 'ROE': 'roe', 'Debt to Equity': 'debt_to_equity',
+                'EPS': 'eps', 'Face Value': 'face_value',
+                'Promoter holding': 'promoter_holding', 'Current Ratio': 'current_ratio',
+                'PEG Ratio': 'peg_ratio'
+            }
 
-            # Extract data from the top ratios section
-            ratios = soup.find_all('li', class_='flex flex-space-between')
-            for ratio in ratios:
+            # --- FIX 2: Find the consolidated ratios div FIRST ---
+            top_ratios_div = soup.find('div', id='top-ratios')
+
+            if not top_ratios_div:
+                # If the consolidated div isn't found, fallback to old logic
+                logger.warning(f"Could not find 'div#top-ratios' on {url}. Scraping may be inaccurate.")
+                ratios_list = soup.find_all('li', class_='flex flex-space-between')
+            else:
+                # Find all ratio 'li' elements *only inside* that specific div
+                ratios_list = top_ratios_div.find_all('li', class_='flex flex-space-between')
+
+            # --- Your original parsing logic now runs on the CORRECT list ---
+            for ratio in ratios_list:
                 try:
                     name_elem = ratio.find('span', class_='name')
                     value_elem = ratio.find('span', class_='number')
@@ -265,30 +269,16 @@ class ScreenerProvider:
                     name = name_elem.text.strip()
                     value = value_elem.text.strip()
 
-                    # Map Screener fields to our standardized keys
-                    field_map = {
-                        'Market Cap': 'market_cap',
-                        'Stock P/E': 'pe_ratio',
-                        'Book Value': 'book_value',
-                        'Dividend Yield': 'dividend_yield',
-                        'ROCE': 'roce',
-                        'ROE': 'roe',
-                        'Debt to Equity': 'debt_to_equity',
-                        'EPS': 'eps',
-                        'Face Value': 'face_value',
-                        'Promoter holding': 'promoter_holding',
-                        'Current Ratio': 'current_ratio',
-                        'PEG Ratio': 'peg_ratio'
-                    }
-
                     if name in field_map:
                         fundamentals[field_map[name]] = self._parse_value(value)
 
                 except Exception as e:
                     logger.debug(f"Error parsing ratio: {e}")
                     continue
+            
+            # --- End of Fix ---
 
-            # Extract from compounded sales/profit growth table
+            # Extract from compounded sales/profit growth table (this logic is fine)
             growth_section = soup.find('section', id='quarters')
             if growth_section:
                 try:
@@ -311,7 +301,7 @@ class ScreenerProvider:
 
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
-                logger.warning(f"Company not found on Screener.in: {company_slug}")
+                logger.warning(f"Company not found on Screener.in (or 404 on consolidated page): {company_slug}")
             else:
                 logger.error(f"HTTP error scraping {company_slug}: {e}")
             return None
@@ -345,7 +335,6 @@ class RedisCache:
     def __init__(self, redis_url: Optional[str] = None):
         """
         Initialize Redis cache
-
         Args:
             redis_url: Redis connection URL (defaults to env var REDIS_URL)
         """
@@ -388,6 +377,7 @@ class RedisCache:
             return
 
         try:
+            # Note: json.dumps converts non-string keys/values to string
             self.redis_client.setex(key, ttl_seconds, json.dumps(value))
             logger.debug(f"Cache SET: {key} (TTL: {ttl_seconds}s)")
         except Exception as e:
@@ -409,15 +399,9 @@ class StockDataProvider:
     ):
         """
         Initialize the unified stock data provider
-
-        Args:
-            fyers_app_id: Fyers API App ID
-            fyers_access_token: Fyers API Access Token
-            symbol_mapper: SymbolMapper instance
-            redis_url: Redis connection URL
         """
         self.fyers = FyersProvider(fyers_app_id, fyers_access_token)
-        self.screener = ScreenerProvider(delay_seconds=1.5)
+        self.screener = ScreenerProvider(delay_seconds=1.5) # Be polite
         self.symbol_mapper = symbol_mapper
         self.cache = RedisCache(redis_url)
 
@@ -436,15 +420,6 @@ class StockDataProvider:
     ) -> Dict[str, Any]:
         """
         Unified method to fetch all stock data
-
-        Args:
-            symbol: Stock symbol (e.g., 'RELIANCE.NS' or 'RELIANCE')
-            fetch_ohlcv: Whether to fetch OHLCV data
-            fetch_fundamentals: Whether to fetch fundamental data
-            period: Time period for OHLCV data
-
-        Returns:
-            Dictionary with all requested data
         """
         # Clean symbol
         base_symbol = symbol.replace('.NS', '').replace('.BO', '').upper().strip()
@@ -458,7 +433,7 @@ class StockDataProvider:
         }
 
         try:
-            # Get company name from mapper
+            # Get company info from mapper
             company_info = self.symbol_mapper.get_company_info(base_symbol)
             result['company_name'] = company_info.get('name', base_symbol)
             company_slug = company_info.get('screener_slug')
@@ -469,8 +444,10 @@ class StockDataProvider:
                 cached_ohlcv = self.cache.get(cache_key)
 
                 if cached_ohlcv:
+                    logger.info(f"OHLCV Cache HIT for {base_symbol}")
                     result['ohlcv'] = cached_ohlcv
                 else:
+                    logger.info(f"OHLCV Cache MISS for {base_symbol}")
                     # Try NSE first, then BSE
                     ohlcv_df = None
                     for exchange in ['NSE', 'BSE']:
@@ -479,14 +456,17 @@ class StockDataProvider:
                         )
                         if ohlcv_df is not None and not ohlcv_df.empty:
                             result['exchange_used'] = exchange
-                            break
+                            break # Found data
 
                     if ohlcv_df is not None and not ohlcv_df.empty:
                         # Convert DataFrame to list of dicts for JSON serialization
                         ohlcv_list = []
-                        for date, row in ohlcv_df.iterrows():
+                        for date_index, row in ohlcv_df.iterrows():
+                            # Make sure date is a string
+                            date_str = date_index.strftime('%Y-%m-%d') if isinstance(date_index, (datetime, date)) else str(date_index)
+                            
                             ohlcv_list.append({
-                                'date': date.strftime('%Y-%m-%d'),
+                                'date': date_str,
                                 'open': float(row['Open']),
                                 'high': float(row['High']),
                                 'low': float(row['Low']),
@@ -500,25 +480,31 @@ class StockDataProvider:
                         result['errors'].append(f"Failed to fetch OHLCV data for {base_symbol}")
 
             # Fetch fundamental data with caching
-            if fetch_fundamentals and company_slug:
-                cache_key = f"fundamentals:{company_slug}"
-                cached_fundamentals = self.cache.get(cache_key)
-
-                if cached_fundamentals:
-                    result['fundamentals'] = cached_fundamentals
+            if fetch_fundamentals:
+                if not company_slug:
+                    logger.warning(f"No screener_slug for {base_symbol}, cannot fetch fundamentals.")
+                    result['errors'].append(f"No screener_slug mapped for {base_symbol}")
                 else:
-                    fundamentals = self.screener.get_fundamentals(company_slug)
-                    if fundamentals:
-                        result['fundamentals'] = fundamentals
-                        self.cache.set(cache_key, fundamentals, self.fundamentals_ttl)
+                    cache_key = f"fundamentals:{company_slug}"
+                    cached_fundamentals = self.cache.get(cache_key)
+
+                    if cached_fundamentals:
+                        logger.info(f"Fundamentals Cache HIT for {company_slug}")
+                        result['fundamentals'] = cached_fundamentals
                     else:
-                        result['errors'].append(f"Failed to fetch fundamentals for {company_slug}")
+                        logger.info(f"Fundamentals Cache MISS for {company_slug}")
+                        fundamentals = self.screener.get_fundamentals(company_slug)
+                        
+                        if fundamentals:
+                            result['fundamentals'] = fundamentals
+                            self.cache.set(cache_key, fundamentals, self.fundamentals_ttl)
+                        else:
+                            result['errors'].append(f"Failed to fetch fundamentals for {company_slug}")
 
             return result
 
         except Exception as e:
-            logger.error(f"Error in get_stock_data for {symbol}: {e}")
-            result['errors'].append(str(e))
-
+            logger.error(f"Critical error in get_stock_data for {symbol}: {e}")
+            logger.error(traceback.format_exc())
+            result['errors'].append(f"Internal server error: {e}")
             return result
-
