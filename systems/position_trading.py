@@ -596,16 +596,15 @@ class EnhancedPositionTradingSystem:
             if isinstance(pe_ratio, (int, float)):
                 if 8 < pe_ratio < 25: score += 15
                 elif 5 < pe_ratio <= 8: score += 12
-                elif 25 <= pe_ratio < 35: score += 8
-                # Note: P/E > 35 gets 0 points, which is why MARUTI gets a low score.
-
+                elif 25 <= pe_ratio < 40: score += 5  # Relaxed this from 35 to 40
+            
             # PEG Ratio
             peg_ratio = fundamentals.get('peg_ratio')
             if isinstance(peg_ratio, (int, float)):
                  if 0.5 < peg_ratio < 1.0: score += 15
                  elif 1.0 <= peg_ratio < 1.5: score += 10
                  
-            # Growth (handle None or non-numeric)
+            # Growth
             rev_g = fundamentals.get('revenue_growth') or fundamentals.get('sales_growth_3y')
             earn_g = fundamentals.get('earnings_growth') or fundamentals.get('profit_growth_3y')
 
@@ -629,7 +628,7 @@ class EnhancedPositionTradingSystem:
                  elif roe_pct > 0.15: score += 8
                  elif roe_pct > 0.12: score += 5
 
-            # Debt to Equity (This is a ratio, not a percentage, so it's OK)
+            # Debt to Equity
             debt_equity = fundamentals.get('debt_to_equity')
             if isinstance(debt_equity, (int, float)):
                  if debt_equity < 0.3: score += 10
@@ -651,16 +650,23 @@ class EnhancedPositionTradingSystem:
                  elif opm_pct > 0.15: score += 3
 
             # Dividend Yield
-            div_yield = fundamentals.get('dividend_yield') or fundamentals.get('expected_div_yield', 0)
+            div_yield = fundamentals.get('dividend_yield')
             if isinstance(div_yield, (int, float)):
                  div_yield_pct = div_yield / 100.0  # <-- CORRECTED
                  if div_yield_pct > 0.03: score += 10
                  elif div_yield_pct > 0.015: score += 6
                  elif div_yield_pct > 0.005: score += 3
+            
+            # Check Expected Div Yield (from internal db) as a fallback
+            elif fundamentals.get('expected_div_yield', 0) > 0:
+                 div_yield_pct = fundamentals.get('expected_div_yield', 0) # Already a decimal
+                 if div_yield_pct > 0.03: score += 10
+                 elif div_yield_pct > 0.015: score += 6
+                 elif div_yield_pct > 0.005: score += 3
 
-            # Financial Health (Ratios, not percentages, so they are OK)
+            # Financial Health
             current_ratio = fundamentals.get('current_ratio')
-            pb_ratio = fundamentals.get('price_to_book') or fundamentals.get('priceToBook')
+            pb_ratio = fundamentals.get('price_to_book')
             
             if isinstance(current_ratio, (int, float)):
                  if current_ratio > 1.5: score += 5
@@ -1480,4 +1486,5 @@ if __name__ == "__main__":
     # except Exception as e:
     #      print(f"An error occurred during test: {e}")
     #      traceback.print_exc()
+
 
