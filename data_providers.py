@@ -227,7 +227,6 @@ class ScreenerProvider:
 
             soup = BeautifulSoup(response.content, 'lxml')
 
-            # --- This is your original dictionary, it's correct ---
             fundamentals = {
                 'pe_ratio': None, 'market_cap': None, 'book_value': None,
                 'dividend_yield': None, 'roe': None, 'roce': None,
@@ -236,7 +235,7 @@ class ScreenerProvider:
                 'price_to_book': None, 'current_ratio': None, 'face_value': None,
                 'promoter_holding': None
             }
-            # --- This is your original map, it's also correct ---
+            
             field_map = {
                 'Market Cap': 'market_cap', 'Stock P/E': 'pe_ratio',
                 'Book Value': 'book_value', 'Dividend Yield': 'dividend_yield',
@@ -257,7 +256,6 @@ class ScreenerProvider:
                 # Find all ratio 'li' elements *only inside* that specific div
                 ratios_list = top_ratios_div.find_all('li', class_='flex flex-space-between')
 
-            # --- Your original parsing logic now runs on the CORRECT list ---
             for ratio in ratios_list:
                 try:
                     name_elem = ratio.find('span', class_='name')
@@ -278,7 +276,7 @@ class ScreenerProvider:
             
             # --- End of Fix ---
 
-            # Extract from compounded sales/profit growth table (this logic is fine)
+            # Extract from compounded sales/profit growth table
             growth_section = soup.find('section', id='quarters')
             if growth_section:
                 try:
@@ -377,7 +375,6 @@ class RedisCache:
             return
 
         try:
-            # Note: json.dumps converts non-string keys/values to string
             self.redis_client.setex(key, ttl_seconds, json.dumps(value))
             logger.debug(f"Cache SET: {key} (TTL: {ttl_seconds}s)")
         except Exception as e:
