@@ -36,7 +36,7 @@ warnings.filterwarnings('ignore')
 logger = logging.getLogger(__name__)
 
 
-class OptimizedSwingTradingSystem:
+class EnhancedSwingTradingSystem:
     """
     Production-grade swing trading system with performance optimizations
     """
@@ -79,10 +79,10 @@ class OptimizedSwingTradingSystem:
                 'batch_analysis': 900    # 15 minutes
             }
             
-            logger.info(f"✅ OptimizedSwingTradingSystem initialized with {len(self.indian_stocks)} stocks")
+            logger.info(f"✅ EnhancedSwingTradingSystem initialized with {len(self.indian_stocks)} stocks")
             
         except Exception as e:
-            logger.error(f"❌ Error initializing OptimizedSwingTradingSystem: {e}")
+            logger.error(f"❌ Error initializing EnhancedSwingTradingSystem: {e}")
             raise
 
     def _validate_trading_params(self):
@@ -1494,7 +1494,7 @@ class OptimizedSwingTradingSystem:
 class BackgroundAnalyzer:
     """Background worker to keep analysis cache fresh"""
     
-    def __init__(self, trading_system: OptimizedSwingTradingSystem, refresh_interval: int = 900):
+    def __init__(self, trading_system: EnhancedSwingTradingSystem, refresh_interval: int = 900):
         """
         Args:
             trading_system: Instance of trading system
@@ -1551,7 +1551,7 @@ if __name__ == "__main__":
     redis_client = redis.Redis.from_url(config.REDIS_URL) if hasattr(config, 'REDIS_URL') else None
     
     # Initialize optimized system
-    system = OptimizedSwingTradingSystem(
+    system = EnhancedSwingTradingSystem(
         data_provider=data_provider,
         redis_client=redis_client
     )
@@ -1600,3 +1600,4 @@ if __name__ == "__main__":
     print("\n" + "="*70)
     print("✅ System ready for production use!")
     print("="*70)
+
