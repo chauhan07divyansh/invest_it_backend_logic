@@ -9,6 +9,7 @@ import backoff
 import redis
 import json
 import pandas as pd
+import traceback
 
 # Fyers API V3
 from fyers_apiv3 import fyersModel
@@ -40,7 +41,7 @@ class FyersProvider:
             symbol: str,
             exchange: str = 'NSE',
             period: str = '6mo',
-            resolution: str = 'D' # Note: Fyers uses 'D' for 1 Day
+            resolution: str = 'D'  # UPDATED: Added resolution parameter
     ) -> Optional[pd.DataFrame]:
         """
         Public-facing method to fetch historical OHLCV data.
@@ -53,6 +54,7 @@ class FyersProvider:
                 '1mo': 30, '3mo': 90, '6mo': 180, '1y': 365,
                 '2y': 730, '3y': 1095, '5y': 1825, '10y': 3650
             }
+            # For intraday, Fyers has limits on days, but for daily it's fine
             days = period_map.get(period, 180)
             from_date = to_date - timedelta(days=days)
 
@@ -62,7 +64,7 @@ class FyersProvider:
             # 3. Call the paginated fetcher
             df = self.fetch_paginated_history(
                 symbol=fyers_symbol,
-                resolution=resolution,
+                resolution=resolution,  # UPDATED: Pass resolution
                 start_date=from_date,
                 end_date=to_date
             )
@@ -86,14 +88,18 @@ class FyersProvider:
             end_date: date
     ) -> Optional[pd.DataFrame]:
         """
-        Fetches historical data by paginating requests in 365-day chunks.
+        Fetches historical data by paginating requests.
+        Adjusts chunk size based on resolution (Fyers has limits).
         """
         all_candles_data = []
         current_start_dt = start_date
 
+        # Fyers limits intraday requests to ~100 days, daily to much more
+        days_per_chunk = 100 if resolution not in ['D', '1D'] else 365
+
         while current_start_dt < end_date:
-            # 1. Calculate the end of this chunk (365 days)
-            chunk_end_dt = current_start_dt + timedelta(days=365)
+            # 1. Calculate the end of this chunk
+            chunk_end_dt = current_start_dt + timedelta(days=days_per_chunk)
 
             # 2. Cap the chunk's end date at the final end_date
             if chunk_end_dt > end_date:
@@ -103,7 +109,7 @@ class FyersProvider:
             range_from = current_start_dt.strftime('%Y-%m-%d')
             range_to = chunk_end_dt.strftime('%Y-%m-%d')
 
-            logger.info(f"Fyers Fetch: Requesting {symbol} from {range_from} to {range_to}")
+            logger.info(f"Fyers Fetch: Requesting {symbol} ({resolution}) from {range_from} to {range_to}")
 
             # 4. Create the Fyers API payload
             payload = {
@@ -125,20 +131,19 @@ class FyersProvider:
                 else:
                     error_msg = response.get('message', 'Unknown error')
                     logger.error(f"Fyers API error for {symbol}: {error_msg}")
-                    # If one chunk fails (e.g., "Invalid input"), stop trying.
                     if 'Invalid' in error_msg:
                         logger.critical(f"Stopping pagination due to invalid request: {payload}")
                         break
-            
+
             except Exception as e:
                 logger.error(f"Fyers Fetch: Exception during API call for {symbol}: {e}")
                 break  # Stop trying if a critical exception occurs
-            
+
             # 5. Set the start of the *next* loop
             current_start_dt = chunk_end_dt + timedelta(days=1)
-            
+
             # 6. IMPORTANT: Add a small delay to avoid hitting API rate limits
-            time.sleep(0.5) # 500ms delay
+            time.sleep(0.5)  # 500ms delay
 
         if not all_candles_data:
             return None
@@ -146,9 +151,15 @@ class FyersProvider:
         # 7. Convert the final list of lists into a DataFrame
         try:
             df = pd.DataFrame(all_candles_data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            df['Date'] = pd.to_datetime(df['timestamp'], unit='s')
+            # Use 'datetime' for intraday, 'date' for daily
+            if resolution in ['D', '1D']:
+                 df['Date'] = pd.to_datetime(df['timestamp'], unit='s').dt.date
+            else:
+                 df['Date'] = pd.to_datetime(df['timestamp'], unit='s')
+
+            df['Date'] = pd.to_datetime(df['Date'])
             df = df.drop(columns=['timestamp'])
-            
+
             # Rename columns to match your StockDataProvider's expectations
             df.rename(columns={
                 'open': 'Open',
@@ -159,17 +170,16 @@ class FyersProvider:
             }, inplace=True)
 
             df = df.set_index('Date')
-            
+
             # Remove any duplicate dates (can happen at the seams) and sort
             df = df[~df.index.duplicated(keep='first')]
             df = df.sort_index()
-            
+
             return df
-            
+
         except Exception as e:
             logger.error(f"Fyers Fetch: Failed to create DataFrame for {symbol}. Error: {e}")
             return None
-    
 
 
 class ScreenerProvider:
@@ -218,7 +228,6 @@ class ScreenerProvider:
         try:
             self._rate_limit()
 
-            # --- FIX 1: Explicitly request the 'consolidated' page ---
             url = f"{self.base_url}/{company_slug}/consolidated/"
             logger.info(f"Scraping Screener.in for {company_slug} at {url}")
 
@@ -233,27 +242,25 @@ class ScreenerProvider:
                 'debt_to_equity': None, 'eps': None, 'sales_growth_3y': None,
                 'profit_growth_3y': None, 'stock_pe': None, 'peg_ratio': None,
                 'price_to_book': None, 'current_ratio': None, 'face_value': None,
-                'promoter_holding': None
+                'promoter_holding': None, 'industry_pe': None  # UPDATED: Added Industry P/E
             }
-            
+
             field_map = {
                 'Market Cap': 'market_cap', 'Stock P/E': 'pe_ratio',
                 'Book Value': 'book_value', 'Dividend Yield': 'dividend_yield',
                 'ROCE': 'roce', 'ROE': 'roe', 'Debt to Equity': 'debt_to_equity',
                 'EPS': 'eps', 'Face Value': 'face_value',
                 'Promoter holding': 'promoter_holding', 'Current Ratio': 'current_ratio',
-                'PEG Ratio': 'peg_ratio'
+                'PEG Ratio': 'peg_ratio',
+                'Industry P/E': 'industry_pe'  # UPDATED: Added Industry P/E
             }
 
-            # --- FIX 2: Find the consolidated ratios div FIRST ---
             top_ratios_div = soup.find('div', id='top-ratios')
 
             if not top_ratios_div:
-                # If the consolidated div isn't found, fallback to old logic
                 logger.warning(f"Could not find 'div#top-ratios' on {url}. Scraping may be inaccurate.")
                 ratios_list = soup.find_all('li', class_='flex flex-space-between')
             else:
-                # Find all ratio 'li' elements *only inside* that specific div
                 ratios_list = top_ratios_div.find_all('li', class_='flex flex-space-between')
 
             for ratio in ratios_list:
@@ -273,24 +280,31 @@ class ScreenerProvider:
                 except Exception as e:
                     logger.debug(f"Error parsing ratio: {e}")
                     continue
-            
-            # --- End of Fix ---
 
-            # Extract from compounded sales/profit growth table
-            growth_section = soup.find('section', id='quarters')
+            # --- UPDATED: Corrected section ID from 'quarters' to 'growth' ---
+            growth_section = soup.find('section', id='growth')
             if growth_section:
                 try:
-                    rows = growth_section.find_all('tr')
-                    for row in rows:
-                        cells = row.find_all('td')
-                        if len(cells) >= 2:
-                            label = cells[0].text.strip()
-                            if '3 Years' in label:
-                                value = cells[1].text.strip()
-                                if 'Sales' in label:
-                                    fundamentals['sales_growth_3y'] = self._parse_value(value)
-                                elif 'Profit' in label:
-                                    fundamentals['profit_growth_3y'] = self._parse_value(value)
+                    # Find the table for "Compounded Sales Growth"
+                    sales_header = growth_section.find('h3', string=lambda t: t and 'Compounded Sales Growth' in t)
+                    if sales_header:
+                        sales_table = sales_header.find_next_sibling('table')
+                        for row in sales_table.find_all('tr'):
+                            cells = row.find_all('td')
+                            if len(cells) >= 2 and '3 Years' in cells[0].text:
+                                fundamentals['sales_growth_3y'] = self._parse_value(cells[1].text)
+                                break
+                    
+                    # Find the table for "Compounded Profit Growth"
+                    profit_header = growth_section.find('h3', string=lambda t: t and 'Compounded Profit Growth' in t)
+                    if profit_header:
+                        profit_table = profit_header.find_next_sibling('table')
+                        for row in profit_table.find_all('tr'):
+                            cells = row.find_all('td')
+                            if len(cells) >= 2 and '3 Years' in cells[0].text:
+                                fundamentals['profit_growth_3y'] = self._parse_value(cells[1].text)
+                                break
+                                
                 except Exception as e:
                     logger.debug(f"Error parsing growth data: {e}")
 
@@ -313,13 +327,11 @@ class ScreenerProvider:
             if not value_str or value_str == '-':
                 return None
 
-            # Remove commas and handle percentage
             value_str = value_str.replace(',', '').replace('%', '').strip()
 
-            # Handle Cr (Crores)
             if 'Cr.' in value_str or 'Cr' in value_str:
                 value_str = value_str.replace('Cr.', '').replace('Cr', '').strip()
-                return float(value_str) * 10000000  # Convert to absolute number
+                return float(value_str) * 10000000
 
             return float(value_str)
 
@@ -331,11 +343,6 @@ class RedisCache:
     """Handles Redis caching with TTL support"""
 
     def __init__(self, redis_url: Optional[str] = None):
-        """
-        Initialize Redis cache
-        Args:
-            redis_url: Redis connection URL (defaults to env var REDIS_URL)
-        """
         redis_url = redis_url or os.getenv('REDIS_URL')
 
         if not redis_url:
@@ -354,10 +361,8 @@ class RedisCache:
                 self.enabled = False
 
     def get(self, key: str) -> Optional[Any]:
-        """Get value from cache"""
         if not self.enabled:
             return None
-
         try:
             data = self.redis_client.get(key)
             if data:
@@ -370,10 +375,8 @@ class RedisCache:
             return None
 
     def set(self, key: str, value: Any, ttl_seconds: int = 3600):
-        """Set value in cache with TTL"""
         if not self.enabled:
             return
-
         try:
             self.redis_client.setex(key, ttl_seconds, json.dumps(value))
             logger.debug(f"Cache SET: {key} (TTL: {ttl_seconds}s)")
@@ -394,15 +397,11 @@ class StockDataProvider:
             symbol_mapper,
             redis_url: Optional[str] = None
     ):
-        """
-        Initialize the unified stock data provider
-        """
         self.fyers = FyersProvider(fyers_app_id, fyers_access_token)
-        self.screener = ScreenerProvider(delay_seconds=1.5) # Be polite
+        self.screener = ScreenerProvider(delay_seconds=1.5)
         self.symbol_mapper = symbol_mapper
         self.cache = RedisCache(redis_url)
 
-        # Cache TTLs
         self.ohlcv_ttl = int(os.getenv('OHLCV_CACHE_TTL', '3600'))  # 1 hour
         self.fundamentals_ttl = int(os.getenv('FUNDAMENTALS_CACHE_TTL', '86400'))  # 24 hours
 
@@ -413,12 +412,12 @@ class StockDataProvider:
             symbol: str,
             fetch_ohlcv: bool = True,
             fetch_fundamentals: bool = True,
-            period: str = '6mo'
+            period: str = '6mo',
+            resolution: str = 'D'  # UPDATED: Added resolution
     ) -> Dict[str, Any]:
         """
         Unified method to fetch all stock data
         """
-        # Clean symbol
         base_symbol = symbol.replace('.NS', '').replace('.BO', '').upper().strip()
 
         result = {
@@ -430,53 +429,68 @@ class StockDataProvider:
         }
 
         try:
-            # Get company info from mapper
             company_info = self.symbol_mapper.get_company_info(base_symbol)
             result['company_name'] = company_info.get('name', base_symbol)
             company_slug = company_info.get('screener_slug')
 
-            # Fetch OHLCV data with caching
             if fetch_ohlcv:
-                cache_key = f"ohlcv:{base_symbol}:{period}"
+                # UPDATED: Cache key now includes resolution
+                cache_key = f"ohlcv:{base_symbol}:{period}:{resolution}"
                 cached_ohlcv = self.cache.get(cache_key)
 
                 if cached_ohlcv:
-                    logger.info(f"OHLCV Cache HIT for {base_symbol}")
+                    logger.info(f"OHLCV Cache HIT for {base_symbol} ({resolution})")
                     result['ohlcv'] = cached_ohlcv
                 else:
-                    logger.info(f"OHLCV Cache MISS for {base_symbol}")
-                    # Try NSE first, then BSE
+                    logger.info(f"OHLCV Cache MISS for {base_symbol} ({resolution})")
                     ohlcv_df = None
                     for exchange in ['NSE', 'BSE']:
                         ohlcv_df = self.fyers.get_historical_data(
-                            base_symbol, exchange, period
+                            base_symbol, exchange, period, resolution  # UPDATED: Pass resolution
                         )
                         if ohlcv_df is not None and not ohlcv_df.empty:
                             result['exchange_used'] = exchange
-                            break # Found data
+                            break
 
                     if ohlcv_df is not None and not ohlcv_df.empty:
-                        # Convert DataFrame to list of dicts for JSON serialization
-                        ohlcv_list = []
-                        for date_index, row in ohlcv_df.iterrows():
-                            # Make sure date is a string
-                            date_str = date_index.strftime('%Y-%m-%d') if isinstance(date_index, (datetime, date)) else str(date_index)
-                            
-                            ohlcv_list.append({
-                                'date': date_str,
-                                'open': float(row['Open']),
-                                'high': float(row['High']),
-                                'low': float(row['Low']),
-                                'close': float(row['Close']),
-                                'volume': int(row['Volume'])
-                            })
+                        
+                        # --- UPDATED: Replaced iterrows() with vectorized conversion ---
+                        logger.debug("Optimizing OHLCV DataFrame to list conversion...")
+                        ohlcv_df_processed = ohlcv_df.reset_index()
+                        
+                        # Format date based on resolution
+                        if resolution in ['D', '1D']:
+                             ohlcv_df_processed['date'] = ohlcv_df_processed['Date'].dt.strftime('%Y-%m-%d')
+                        else:
+                             ohlcv_df_processed['date'] = ohlcv_df_processed['Date'].dt.strftime('%Y-%m-%d %H:%M:%S')
+
+                        # Ensure correct types and lowercase keys for JSON
+                        ohlcv_df_processed = ohlcv_df_processed.rename(columns={
+                            'Open': 'open', 'High': 'high', 'Low': 'low', 'Close': 'close', 'Volume': 'volume'
+                        })
+
+                        output_columns = ['date', 'open', 'high', 'low', 'close', 'volume']
+                        
+                        # Use list comprehension on to_dict('records') to ensure standard python types
+                        ohlcv_records = ohlcv_df_processed[output_columns].to_dict('records')
+                        
+                        ohlcv_list = [
+                            {
+                                'date': r['date'],
+                                'open': float(r['open']),
+                                'high': float(r['high']),
+                                'low': float(r['low']),
+                                'close': float(r['close']),
+                                'volume': int(r['volume'])
+                            } for r in ohlcv_records
+                        ]
+                        # --- End of optimization ---
 
                         result['ohlcv'] = ohlcv_list
                         self.cache.set(cache_key, ohlcv_list, self.ohlcv_ttl)
                     else:
                         result['errors'].append(f"Failed to fetch OHLCV data for {base_symbol}")
 
-            # Fetch fundamental data with caching
             if fetch_fundamentals:
                 if not company_slug:
                     logger.warning(f"No screener_slug for {base_symbol}, cannot fetch fundamentals.")
@@ -491,7 +505,7 @@ class StockDataProvider:
                     else:
                         logger.info(f"Fundamentals Cache MISS for {company_slug}")
                         fundamentals = self.screener.get_fundamentals(company_slug)
-                        
+
                         if fundamentals:
                             result['fundamentals'] = fundamentals
                             self.cache.set(cache_key, fundamentals, self.fundamentals_ttl)
