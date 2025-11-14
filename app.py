@@ -338,7 +338,7 @@ class TradingAPI:
         if not self.swing_system:
             raise ConnectionAbortedError('Swing trading system not available')
         all_stocks = self.swing_system.get_all_stock_symbols()
-        all_results = self.swing_system.analyze_multiple_stocks(all_stocks)
+        all_results = self.swing_system.analyze_stocks_parallel(all_stocks)
         filtered = self.swing_system.filter_stocks_by_risk_appetite(all_results, risk_appetite)
         portfolio_list = self.swing_system.generate_portfolio_allocation(filtered, budget, risk_appetite)
 
