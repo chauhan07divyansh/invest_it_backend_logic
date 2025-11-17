@@ -494,93 +494,379 @@ class EnhancedPositionTradingSystem:
     #  DATABASE INITIALIZATION (Kept as is - internal symbol info)
     # ==============================================================================
     def initialize_stock_database(self):
-        """Initialize comprehensive Indian stock database with fundamental data structure"""
-        # --- THIS METHOD REMAINS THE SAME ---
-        try:
-            self.indian_stocks = {
-                 # NIFTY 50 Stocks with enhanced info
-                 "RELIANCE": {"name": "Reliance Industries", "sector": "Oil & Gas", "market_cap": "Large", "div_yield": 0.003},
-                 "TCS": {"name": "Tata Consultancy Services", "sector": "Information Technology", "market_cap": "Large", "div_yield": 0.025},
-                 "HDFCBANK": {"name": "HDFC Bank", "sector": "Banking", "market_cap": "Large", "div_yield": 0.012},
-                 "INFY": {"name": "Infosys", "sector": "Information Technology", "market_cap": "Large", "div_yield": 0.023},
-                 "HINDUNILVR": {"name": "Hindustan Unilever", "sector": "Consumer Goods", "market_cap": "Large", "div_yield": 0.014},
-                 "ICICIBANK": {"name": "ICICI Bank", "sector": "Banking", "market_cap": "Large", "div_yield": 0.008},
-                 "KOTAKBANK": {"name": "Kotak Mahindra Bank", "sector": "Banking", "market_cap": "Large", "div_yield": 0.005},
-                 "BAJFINANCE": {"name": "Bajaj Finance", "sector": "Financial Services", "market_cap": "Large", "div_yield": 0.002},
-                 "LT": {"name": "Larsen & Toubro", "sector": "Construction", "market_cap": "Large", "div_yield": 0.018},
-                 "SBIN": {"name": "State Bank of India", "sector": "Banking", "market_cap": "Large", "div_yield": 0.035},
-                 "BHARTIARTL": {"name": "Bharti Airtel", "sector": "Telecommunications", "market_cap": "Large", "div_yield": 0.008},
-                 "ASIANPAINT": {"name": "Asian Paints", "sector": "Consumer Goods", "market_cap": "Large", "div_yield": 0.008},
-                 "MARUTI": {"name": "Maruti Suzuki", "sector": "Automobile", "market_cap": "Large", "div_yield": 0.012},
-                 "TITAN": {"name": "Titan Company", "sector": "Consumer Goods", "market_cap": "Large", "div_yield": 0.005},
-                 "SUNPHARMA": {"name": "Sun Pharmaceutical", "sector": "Pharmaceuticals", "market_cap": "Large", "div_yield": 0.008},
-                 "ULTRACEMCO": {"name": "UltraTech Cement", "sector": "Cement", "market_cap": "Large", "div_yield": 0.005},
-                 "NESTLEIND": {"name": "Nestle India", "sector": "Consumer Goods", "market_cap": "Large", "div_yield": 0.008},
-                 "HCLTECH": {"name": "HCL Technologies", "sector": "Information Technology", "market_cap": "Large", "div_yield": 0.025},
-                 "AXISBANK": {"name": "Axis Bank", "sector": "Banking", "market_cap": "Large", "div_yield": 0.008},
-                 "WIPRO": {"name": "Wipro", "sector": "Information Technology", "market_cap": "Large", "div_yield": 0.015},
-                 "NTPC": {"name": "NTPC", "sector": "Power", "market_cap": "Large", "div_yield": 0.045},
-                 "POWERGRID": {"name": "Power Grid Corporation", "sector": "Power", "market_cap": "Large", "div_yield": 0.038},
-                 "ONGC": {"name": "Oil & Natural Gas Corporation", "sector": "Oil & Gas", "market_cap": "Large", "div_yield": 0.055},
-                 "TECHM": {"name": "Tech Mahindra", "sector": "Information Technology", "market_cap": "Large", "div_yield": 0.032},
-                 "TATASTEEL": {"name": "Tata Steel", "sector": "Steel", "market_cap": "Large", "div_yield": 0.025},
-                 "ADANIENT": {"name": "Adani Enterprises", "sector": "Conglomerate", "market_cap": "Large", "div_yield": 0.001},
-                 "COALINDIA": {"name": "Coal India", "sector": "Mining", "market_cap": "Large", "div_yield": 0.065},
-                 "HINDALCO": {"name": "Hindalco Industries", "sector": "Metals", "market_cap": "Large", "div_yield": 0.008},
-                 "JSWSTEEL": {"name": "JSW Steel", "sector": "Steel", "market_cap": "Large", "div_yield": 0.012},
-                 "BAJAJ-AUTO": {"name": "Bajaj Auto", "sector": "Automobile", "market_cap": "Large", "div_yield": 0.022},
-                 "M&M": {"name": "Mahindra & Mahindra", "sector": "Automobile", "market_cap": "Large", "div_yield": 0.018},
-                 "HEROMOTOCO": {"name": "Hero MotoCorp", "sector": "Automobile", "market_cap": "Large", "div_yield": 0.025},
-                 "GRASIM": {"name": "Grasim Industries", "sector": "Cement", "market_cap": "Large", "div_yield": 0.015},
-                 "SHREECEM": {"name": "Shree Cement", "sector": "Cement", "market_cap": "Large", "div_yield": 0.003},
-                 "EICHERMOT": {"name": "Eicher Motors", "sector": "Automobile", "market_cap": "Large", "div_yield": 0.005},
-                 "UPL": {"name": "UPL Limited", "sector": "Chemicals", "market_cap": "Large", "div_yield": 0.012},
-                 "BPCL": {"name": "Bharat Petroleum", "sector": "Oil & Gas", "market_cap": "Large", "div_yield": 0.035},
-                 "DIVISLAB": {"name": "Divi's Laboratories", "sector": "Pharmaceuticals", "market_cap": "Large", "div_yield": 0.005},
-                 "DRREDDY": {"name": "Dr. Reddy's Laboratories", "sector": "Pharmaceuticals", "market_cap": "Large", "div_yield": 0.008},
-                 "CIPLA": {"name": "Cipla", "sector": "Pharmaceuticals", "market_cap": "Large", "div_yield": 0.012},
-                 "BRITANNIA": {"name": "Britannia Industries", "sector": "Consumer Goods", "market_cap": "Large", "div_yield": 0.008},
-                 "TATACONSUM": {"name": "Tata Consumer Products", "sector": "Consumer Goods", "market_cap": "Large", "div_yield": 0.015},
-                 "IOC": {"name": "Indian Oil Corporation", "sector": "Oil & Gas", "market_cap": "Large", "div_yield": 0.042},
-                 "APOLLOHOSP": {"name": "Apollo Hospitals", "sector": "Healthcare", "market_cap": "Large", "div_yield": 0.002},
-                 "BAJAJFINSV": {"name": "Bajaj Finserv", "sector": "Financial Services", "market_cap": "Large", "div_yield": 0.008},
-                 "HDFCLIFE": {"name": "HDFC Life Insurance", "sector": "Insurance", "market_cap": "Large", "div_yield": 0.012},
-                 "SBILIFE": {"name": "SBI Life Insurance", "sector": "Insurance", "market_cap": "Large", "div_yield": 0.008},
-                 "INDUSINDBK": {"name": "IndusInd Bank", "sector": "Banking", "market_cap": "Large", "div_yield": 0.015},
-                 "ADANIPORTS": {"name": "Adani Ports", "sector": "Infrastructure", "market_cap": "Large", "div_yield": 0.012},
-                 "TATAMOTORS": {"name": "Tata Motors", "sector": "Automobile", "market_cap": "Large", "div_yield": 0.008},
-                 "ITC": {"name": "ITC Limited", "sector": "Consumer Goods", "market_cap": "Large", "div_yield": 0.055},
+    """Initialize comprehensive Indian stock database with fundamental data structure"""
+    try:
+        # Sector-based dividend yield estimates
+        sector_div_yields = {
+            'Oil & Gas': 0.045,
+            'Power': 0.040,
+            'Utilities': 0.040,
+            'Mining': 0.050,
+            'Banking': 0.010,
+            'Financial Services': 0.008,
+            'Insurance': 0.010,
+            'Information Technology': 0.020,
+            'Pharmaceuticals': 0.008,
+            'Healthcare': 0.006,
+            'Consumer Goods': 0.012,
+            'FMCG': 0.012,
+            'Automobile': 0.015,
+            'Steel': 0.020,
+            'Metals': 0.015,
+            'Cement': 0.008,
+            'Construction': 0.015,
+            'Infrastructure': 0.012,
+            'Real Estate': 0.010,
+            'Telecommunications': 0.008,
+            'Media': 0.005,
+            'Textiles': 0.008,
+            'Chemicals': 0.010,
+            'Fertilizers': 0.015,
+            'Retail': 0.003,
+            'Conglomerate': 0.005,
+            'Capital Goods': 0.012,
+            'Electricals': 0.010,
+            'Defence': 0.008,
+            'Hotels': 0.005,
+            'Consumer Durables': 0.008,
+            'Footwear': 0.010,
+            'Logistics': 0.008,
+            'Technology': 0.020,
+            'Internet': 0.002,
+            'Electronics': 0.005,
+            'Building Materials': 0.010,
+            'Beverages': 0.008,
+            'Consumer Services': 0.003,
+            'Gaming': 0.001,
+            'Default': 0.010
+        }
 
-                 # Additional Mid & Small Cap Stocks
-                 "GODREJCP": {"name": "Godrej Consumer Products", "sector": "Consumer Goods", "market_cap": "Mid", "div_yield": 0.012},
-                 "COLPAL": {"name": "Colgate-Palmolive India", "sector": "Consumer Goods", "market_cap": "Mid", "div_yield": 0.008},
-                 "PIDILITIND": {"name": "Pidilite Industries", "sector": "Chemicals", "market_cap": "Mid", "div_yield": 0.005},
-                 "MARICO": {"name": "Marico Limited", "sector": "Consumer Goods", "market_cap": "Mid", "div_yield": 0.018},
-                 "DABUR": {"name": "Dabur India", "sector": "Consumer Goods", "market_cap": "Mid", "div_yield": 0.012},
-                 "LUPIN": {"name": "Lupin Limited", "sector": "Pharmaceuticals", "market_cap": "Mid", "div_yield": 0.008},
-                 "BIOCON": {"name": "Biocon Limited", "sector": "Pharmaceuticals", "market_cap": "Mid", "div_yield": 0.005},
-                 "MOTHERSUMI": {"name": "Motherson Sumi Systems", "sector": "Automobile", "market_cap": "Mid", "div_yield": 0.012}, # Note: Name might change
-                 "TVSMOTOR": {"name": "TVS Motor Company", "sector": "Automobile", "market_cap": "Mid", "div_yield": 0.008},
-                 "MRF": {"name": "MRF Limited", "sector": "Automobile", "market_cap": "Mid", "div_yield": 0.015},
-                 "DMART": {"name": "Avenue Supermarts", "sector": "Retail", "market_cap": "Mid", "div_yield": 0.001},
-                 "TRENT": {"name": "Trent Limited", "sector": "Retail", "market_cap": "Mid", "div_yield": 0.002},
-                 "PAGEIND": {"name": "Page Industries", "sector": "Textiles", "market_cap": "Mid", "div_yield": 0.003},
+        # NIFTY 50 stocks (Large Cap)
+        nifty_50 = {
+            "RELIANCE": {"name": "Reliance Industries", "sector": "Oil & Gas"},
+            "TCS": {"name": "Tata Consultancy Services", "sector": "Information Technology"},
+            "HDFCBANK": {"name": "HDFC Bank", "sector": "Banking"},
+            "INFY": {"name": "Infosys", "sector": "Information Technology"},
+            "HINDUNILVR": {"name": "Hindustan Unilever", "sector": "Consumer Goods"},
+            "ICICIBANK": {"name": "ICICI Bank", "sector": "Banking"},
+            "KOTAKBANK": {"name": "Kotak Mahindra Bank", "sector": "Banking"},
+            "BAJFINANCE": {"name": "Bajaj Finance", "sector": "Financial Services"},
+            "LT": {"name": "Larsen & Toubro", "sector": "Construction"},
+            "SBIN": {"name": "State Bank of India", "sector": "Banking"},
+            "BHARTIARTL": {"name": "Bharti Airtel", "sector": "Telecommunications"},
+            "ASIANPAINT": {"name": "Asian Paints", "sector": "Consumer Goods"},
+            "MARUTI": {"name": "Maruti Suzuki", "sector": "Automobile"},
+            "TITAN": {"name": "Titan Company", "sector": "Consumer Goods"},
+            "SUNPHARMA": {"name": "Sun Pharmaceutical", "sector": "Pharmaceuticals"},
+            "ULTRACEMCO": {"name": "UltraTech Cement", "sector": "Cement"},
+            "NESTLEIND": {"name": "Nestle India", "sector": "Consumer Goods"},
+            "HCLTECH": {"name": "HCL Technologies", "sector": "Information Technology"},
+            "AXISBANK": {"name": "Axis Bank", "sector": "Banking"},
+            "WIPRO": {"name": "Wipro", "sector": "Information Technology"},
+            "NTPC": {"name": "NTPC", "sector": "Power"},
+            "POWERGRID": {"name": "Power Grid Corporation", "sector": "Power"},
+            "ONGC": {"name": "Oil & Natural Gas Corporation", "sector": "Oil & Gas"},
+            "TECHM": {"name": "Tech Mahindra", "sector": "Information Technology"},
+            "TATASTEEL": {"name": "Tata Steel", "sector": "Steel"},
+            "ADANIENT": {"name": "Adani Enterprises", "sector": "Conglomerate"},
+            "COALINDIA": {"name": "Coal India", "sector": "Mining"},
+            "HINDALCO": {"name": "Hindalco Industries", "sector": "Metals"},
+            "JSWSTEEL": {"name": "JSW Steel", "sector": "Steel"},
+            "BAJAJ-AUTO": {"name": "Bajaj Auto", "sector": "Automobile"},
+            "M&M": {"name": "Mahindra & Mahindra", "sector": "Automobile"},
+            "HEROMOTOCO": {"name": "Hero MotoCorp", "sector": "Automobile"},
+            "GRASIM": {"name": "Grasim Industries", "sector": "Cement"},
+            "SHREECEM": {"name": "Shree Cement", "sector": "Cement"},
+            "EICHERMOT": {"name": "Eicher Motors", "sector": "Automobile"},
+            "UPL": {"name": "UPL Limited", "sector": "Chemicals"},
+            "BPCL": {"name": "Bharat Petroleum", "sector": "Oil & Gas"},
+            "DIVISLAB": {"name": "Divi's Laboratories", "sector": "Pharmaceuticals"},
+            "DRREDDY": {"name": "Dr. Reddy's Laboratories", "sector": "Pharmaceuticals"},
+            "CIPLA": {"name": "Cipla", "sector": "Pharmaceuticals"},
+            "BRITANNIA": {"name": "Britannia Industries", "sector": "Consumer Goods"},
+            "TATACONSUM": {"name": "Tata Consumer Products", "sector": "Consumer Goods"},
+            "IOC": {"name": "Indian Oil Corporation", "sector": "Oil & Gas"},
+            "APOLLOHOSP": {"name": "Apollo Hospitals", "sector": "Healthcare"},
+            "BAJAJFINSV": {"name": "Bajaj Finserv", "sector": "Financial Services"},
+            "HDFCLIFE": {"name": "HDFC Life Insurance", "sector": "Insurance"},
+            "SBILIFE": {"name": "SBI Life Insurance", "sector": "Insurance"},
+            "INDUSINDBK": {"name": "IndusInd Bank", "sector": "Banking"},
+            "ADANIPORTS": {"name": "Adani Ports", "sector": "Infrastructure"},
+            "TATAMOTORS": {"name": "Tata Motors", "sector": "Automobile"},
+            "ITC": {"name": "ITC Limited", "sector": "Consumer Goods"},
+        }
+
+        # NIFTY NEXT 50 stocks (Large Cap)
+        nifty_next_50 = {
+            "SIEMENS": {"name": "Siemens Limited", "sector": "Capital Goods"},
+            "HAVELLS": {"name": "Havells India", "sector": "Electricals"},
+            "DLF": {"name": "DLF Limited", "sector": "Real Estate"},
+            "GODREJCP": {"name": "Godrej Consumer Products", "sector": "Consumer Goods"},
+            "COLPAL": {"name": "Colgate-Palmolive India", "sector": "Consumer Goods"},
+            "PIDILITIND": {"name": "Pidilite Industries", "sector": "Chemicals"},
+            "MARICO": {"name": "Marico Limited", "sector": "Consumer Goods"},
+            "DABUR": {"name": "Dabur India", "sector": "Consumer Goods"},
+            "LUPIN": {"name": "Lupin Limited", "sector": "Pharmaceuticals"},
+            "BIOCON": {"name": "Biocon Limited", "sector": "Pharmaceuticals"},
+            "MOTHERSUMI": {"name": "Motherson Sumi Systems", "sector": "Automobile"},
+            "BOSCHLTD": {"name": "Bosch Limited", "sector": "Automobile"},
+            "EXIDEIND": {"name": "Exide Industries", "sector": "Automobile"},
+            "ASHOKLEY": {"name": "Ashok Leyland", "sector": "Automobile"},
+            "TVSMOTOR": {"name": "TVS Motor Company", "sector": "Automobile"},
+            "BALKRISIND": {"name": "Balkrishna Industries", "sector": "Automobile"},
+            "MRF": {"name": "MRF Limited", "sector": "Automobile"},
+            "APOLLOTYRE": {"name": "Apollo Tyres", "sector": "Automobile"},
+            "BHARATFORG": {"name": "Bharat Forge", "sector": "Automobile"},
+            "CUMMINSIND": {"name": "Cummins India", "sector": "Automobile"},
+            "FEDERALBNK": {"name": "Federal Bank", "sector": "Banking"},
+            "BANDHANBNK": {"name": "Bandhan Bank", "sector": "Banking"},
+            "IDFCFIRSTB": {"name": "IDFC First Bank", "sector": "Banking"},
+            "PNB": {"name": "Punjab National Bank", "sector": "Banking"},
+            "BANKBARODA": {"name": "Bank of Baroda", "sector": "Banking"},
+            "CANBK": {"name": "Canara Bank", "sector": "Banking"},
+            "UNIONBANK": {"name": "Union Bank of India", "sector": "Banking"},
+            "CHOLAFIN": {"name": "Cholamandalam Investment", "sector": "Financial Services"},
+            "LICHSGFIN": {"name": "LIC Housing Finance", "sector": "Financial Services"},
+            "SRTRANSFIN": {"name": "Shriram Transport Finance", "sector": "Financial Services"},
+            "LTTS": {"name": "L&T Technology Services", "sector": "Information Technology"},
+            "PERSISTENT": {"name": "Persistent Systems", "sector": "Information Technology"},
+            "COFORGE": {"name": "Coforge Limited", "sector": "Information Technology"},
+            "MPHASIS": {"name": "Mphasis Limited", "sector": "Information Technology"},
+            "DMART": {"name": "Avenue Supermarts", "sector": "Retail"},
+            "TRENT": {"name": "Trent Limited", "sector": "Retail"},
+            "PAGEIND": {"name": "Page Industries", "sector": "Textiles"},
+            "RAYMOND": {"name": "Raymond Limited", "sector": "Textiles"},
+            "BERGEPAINT": {"name": "Berger Paints", "sector": "Consumer Goods"},
+            "VOLTAS": {"name": "Voltas Limited", "sector": "Consumer Durables"},
+            "WHIRLPOOL": {"name": "Whirlpool of India", "sector": "Consumer Durables"},
+            "CROMPTON": {"name": "Crompton Greaves", "sector": "Electricals"},
+            "TORNTPHARM": {"name": "Torrent Pharmaceuticals", "sector": "Pharmaceuticals"},
+            "AUROPHARMA": {"name": "Aurobindo Pharma", "sector": "Pharmaceuticals"},
+            "ALKEM": {"name": "Alkem Laboratories", "sector": "Pharmaceuticals"},
+            "JUBLFOOD": {"name": "Jubilant FoodWorks", "sector": "Consumer Services"},
+            "VBL": {"name": "Varun Beverages", "sector": "Beverages"},
+            "EMAMILTD": {"name": "Emami Limited", "sector": "Consumer Goods"},
+            "GODREJPROP": {"name": "Godrej Properties", "sector": "Real Estate"},
+            "OBEROIRLTY": {"name": "Oberoi Realty", "sector": "Real Estate"},
+        }
+
+        # NIFTY MIDCAP 100 stocks (Mid Cap)
+        nifty_midcap_100 = {
+            "ABCAPITAL": {"name": "Aditya Birla Capital", "sector": "Financial Services"},
+            "ABFRL": {"name": "Aditya Birla Fashion", "sector": "Retail"},
+            "ACC": {"name": "ACC Limited", "sector": "Cement"},
+            "ADANIGREEN": {"name": "Adani Green Energy", "sector": "Power"},
+            "ADANIPOWER": {"name": "Adani Power", "sector": "Power"},
+            "AFFLE": {"name": "Affle India", "sector": "Technology"},
+            "AIAENG": {"name": "AIA Engineering", "sector": "Capital Goods"},
+            "AJANTPHARM": {"name": "Ajanta Pharma", "sector": "Pharmaceuticals"},
+            "AKUMS": {"name": "Akums Drugs", "sector": "Pharmaceuticals"},
+            "AMBER": {"name": "Amber Enterprises", "sector": "Consumer Durables"},
+            "AMBUJACEM": {"name": "Ambuja Cements", "sector": "Cement"},
+            "ASTRAL": {"name": "Astral Limited", "sector": "Building Materials"},
+            "ATUL": {"name": "Atul Limited", "sector": "Chemicals"},
+            "AUBANK": {"name": "AU Small Finance Bank", "sector": "Banking"},
+            "BAJAJELEC": {"name": "Bajaj Electricals", "sector": "Electricals"},
+            "BALAMINES": {"name": "Balaji Amines", "sector": "Chemicals"},
+            "BATAINDIA": {"name": "Bata India", "sector": "Footwear"},
+            "BEL": {"name": "Bharat Electronics", "sector": "Defence"},
+            "BHEL": {"name": "Bharat Heavy Electricals", "sector": "Capital Goods"},
+            "BRIGADE": {"name": "Brigade Enterprises", "sector": "Real Estate"},
+            "CESC": {"name": "CESC Limited", "sector": "Power"},
+            "CHAMBLFERT": {"name": "Chambal Fertilizers", "sector": "Fertilizers"},
+            "CONCOR": {"name": "Container Corporation", "sector": "Logistics"},
+            "COROMANDEL": {"name": "Coromandel International", "sector": "Fertilizers"},
+            "CRISIL": {"name": "CRISIL Limited", "sector": "Financial Services"},
+            "CUB": {"name": "City Union Bank", "sector": "Banking"},
+            "CYIENT": {"name": "Cyient Limited", "sector": "Information Technology"},
+            "DEEPAKNTR": {"name": "Deepak Nitrite", "sector": "Chemicals"},
+            "DIXON": {"name": "Dixon Technologies", "sector": "Electronics"},
+            "ESCORTS": {"name": "Escorts Kubota", "sector": "Automobile"},
+            "FACT": {"name": "Fertilizers And Chemicals", "sector": "Fertilizers"},
+            "GAIL": {"name": "GAIL India", "sector": "Oil & Gas"},
+            "GLENMARK": {"name": "Glenmark Pharmaceuticals", "sector": "Pharmaceuticals"},
+            "GRANULES": {"name": "Granules India", "sector": "Pharmaceuticals"},
+            "GRAPHITE": {"name": "Graphite India", "sector": "Capital Goods"},
+            "GUJGASLTD": {"name": "Gujarat Gas", "sector": "Oil & Gas"},
+            "HFCL": {"name": "HFCL Limited", "sector": "Telecommunications"},
+            "HINDCOPPER": {"name": "Hindustan Copper", "sector": "Metals"},
+            "HINDPETRO": {"name": "Hindustan Petroleum", "sector": "Oil & Gas"},
+            "HONAUT": {"name": "Honeywell Automation", "sector": "Capital Goods"},
+            "IEX": {"name": "Indian Energy Exchange", "sector": "Financial Services"},
+            "IGL": {"name": "Indraprastha Gas", "sector": "Oil & Gas"},
+            "INDHOTEL": {"name": "Indian Hotels", "sector": "Hotels"},
+            "INDUSTOWER": {"name": "Indus Towers", "sector": "Telecommunications"},
+            "INTELLECT": {"name": "Intellect Design Arena", "sector": "Technology"},
+            "IRCTC": {"name": "Indian Railway Catering", "sector": "Consumer Services"},
+            "ISEC": {"name": "ICICI Securities", "sector": "Financial Services"},
+            "JINDALSTEL": {"name": "Jindal Steel & Power", "sector": "Steel"},
+            "JKCEMENT": {"name": "JK Cement", "sector": "Cement"},
+            "JSWENERGY": {"name": "JSW Energy", "sector": "Power"},
+            "KAJARIACER": {"name": "Kajaria Ceramics", "sector": "Building Materials"},
+            "KEI": {"name": "KEI Industries", "sector": "Electricals"},
+            "L&TFH": {"name": "L&T Finance Holdings", "sector": "Financial Services"},
+            "LALPATHLAB": {"name": "Dr Lal PathLabs", "sector": "Healthcare"},
+            "LAURUSLABS": {"name": "Laurus Labs", "sector": "Pharmaceuticals"},
+            "MANAPPURAM": {"name": "Manappuram Finance", "sector": "Financial Services"},
+            "MCX": {"name": "Multi Commodity Exchange", "sector": "Financial Services"},
+            "METROBRAND": {"name": "Metro Brands", "sector": "Footwear"},
+            "MFSL": {"name": "Max Financial Services", "sector": "Insurance"},
+            "MGL": {"name": "Mahanagar Gas", "sector": "Oil & Gas"},
+            "MINDTREE": {"name": "Mindtree Limited", "sector": "Information Technology"},
+            "MOTHERSON": {"name": "Samvardhana Motherson", "sector": "Automobile"},
+            "MUTHOOTFIN": {"name": "Muthoot Finance", "sector": "Financial Services"},
+            "NATIONALUM": {"name": "National Aluminium", "sector": "Metals"},
+            "NAUKRI": {"name": "Info Edge India", "sector": "Internet"},
+            "NAVINFLUOR": {"name": "Navin Fluorine", "sector": "Chemicals"},
+            "NMDC": {"name": "NMDC Limited", "sector": "Mining"},
+            "OIL": {"name": "Oil India", "sector": "Oil & Gas"},
+            "PAYTM": {"name": "One 97 Communications", "sector": "Financial Services"},
+            "PEL": {"name": "Piramal Enterprises", "sector": "Financial Services"},
+            "PETRONET": {"name": "Petronet LNG", "sector": "Oil & Gas"},
+            "PFC": {"name": "Power Finance Corporation", "sector": "Financial Services"},
+            "PHOENIXLTD": {"name": "Phoenix Mills", "sector": "Real Estate"},
+            "PIIND": {"name": "PI Industries", "sector": "Chemicals"},
+            "POLYCAB": {"name": "Polycab India", "sector": "Electricals"},
+            "PRESTIGE": {"name": "Prestige Estates", "sector": "Real Estate"},
+            "RECLTD": {"name": "REC Limited", "sector": "Financial Services"},
+            "SBICARD": {"name": "SBI Cards", "sector": "Financial Services"},
+            "SOLARINDS": {"name": "Solar Industries", "sector": "Chemicals"},
+            "SONACOMS": {"name": "Sona BLW Precision", "sector": "Automobile"},
+            "SRF": {"name": "SRF Limited", "sector": "Chemicals"},
+            "STAR": {"name": "Sterlite Technologies", "sector": "Telecommunications"},
+            "TATACOMM": {"name": "Tata Communications", "sector": "Telecommunications"},
+            "TATAELXSI": {"name": "Tata Elxsi", "sector": "Information Technology"},
+            "TATAPOWER": {"name": "Tata Power", "sector": "Power"},
+            "THERMAX": {"name": "Thermax Limited", "sector": "Capital Goods"},
+            "TORNTPOWER": {"name": "Torrent Power", "sector": "Power"},
+            "UBL": {"name": "United Breweries", "sector": "Beverages"},
+            "VEDL": {"name": "Vedanta Limited", "sector": "Metals"},
+            "ZOMATO": {"name": "Zomato Limited", "sector": "Consumer Services"},
+            "ZYDUSLIFE": {"name": "Zydus Lifesciences", "sector": "Pharmaceuticals"},
+        }
+
+        # SMALLCAP STOCKS (Small Cap)
+        smallcap_stocks = {
+            "AAVAS": {"name": "Aavas Financiers", "sector": "Financial Services"},
+            "ANANDRATHI": {"name": "Anand Rathi Wealth", "sector": "Financial Services"},
+            "ANGELONE": {"name": "Angel One", "sector": "Financial Services"},
+            "ASIANHOTNR": {"name": "Asian Hotels (North)", "sector": "Hotels"},
+            "BASF": {"name": "BASF India", "sector": "Chemicals"},
+            "BLUESTARCO": {"name": "Blue Star", "sector": "Consumer Durables"},
+            "CAMS": {"name": "CAMS", "sector": "Financial Services"},
+            "CDSL": {"name": "Central Depository Services", "sector": "Financial Services"},
+            "CENTRALBK": {"name": "Central Bank of India", "sector": "Banking"},
+            "CENTURYPLY": {"name": "Century Plyboards", "sector": "Building Materials"},
+            "CLEAN": {"name": "Clean Science", "sector": "Chemicals"},
+            "CREDITACC": {"name": "CreditAccess Grameen", "sector": "Financial Services"},
+            "CSBBANK": {"name": "CSB Bank", "sector": "Banking"},
+            "DELTACORP": {"name": "Delta Corp", "sector": "Gaming"},
+            "DEVYANI": {"name": "Devyani International", "sector": "Consumer Services"},
+            "EQUITAS": {"name": "Equitas Small Finance Bank", "sector": "Banking"},
+            "FINPIPE": {"name": "Fine Organic Industries", "sector": "Chemicals"},
+            "FLUOROCHEM": {"name": "Gujarat Fluorochemicals", "sector": "Chemicals"},
+            "GRINDWELL": {"name": "Grindwell Norton", "sector": "Capital Goods"},
+            "HAPPSTMNDS": {"name": "Happiest Minds", "sector": "Information Technology"},
+            "HEMHINDUS": {"name": "HEG Limited", "sector": "Capital Goods"},
+            "IIFLWAM": {"name": "IIFL Wealth Management", "sector": "Financial Services"},
+            "INDIAMART": {"name": "IndiaMART InterMESH", "sector": "Internet"},
+            "INDIANB": {"name": "Indian Bank", "sector": "Banking"},
+            "JUBLPHARMA": {"name": "Jubilant Pharmova", "sector": "Pharmaceuticals"},
+            "JUSTDIAL": {"name": "Just Dial", "sector": "Internet"},
+            "KPITTECH": {"name": "KPIT Technologies", "sector": "Information Technology"},
+            "LATENTVIEW": {"name": "Latent View Analytics", "sector": "Information Technology"},
+            "LEMONTREE": {"name": "Lemon Tree Hotels", "sector": "Hotels"},
+            "MAZDOCK": {"name": "Mazagon Dock Shipbuilders", "sector": "Defence"},
+            "METROPOLIS": {"name": "Metropolis Healthcare", "sector": "Healthcare"},
+            "MIDHANI": {"name": "Mishra Dhatu Nigam", "sector": "Defence"},
+            "NAZARA": {"name": "Nazara Technologies", "sector": "Gaming"},
+            "NIACL": {"name": "New India Assurance", "sector": "Insurance"},
+            "NYKAA": {"name": "FSN E-Commerce (Nykaa)", "sector": "Retail"},
+            "ORIENTELEC": {"name": "Orient Electric", "sector": "Electricals"},
+            "PARAS": {"name": "Paras Defence", "sector": "Defence"},
+            "PNBHOUSING": {"name": "PNB Housing Finance", "sector": "Financial Services"},
+            "POLICYBZR": {"name": "PB Fintech", "sector": "Financial Services"},
+            "POONAWALLA": {"name": "Poonawalla Fincorp", "sector": "Financial Services"},
+            "RAILTEL": {"name": "RailTel Corporation", "sector": "Telecommunications"},
+            "RATNAMANI": {"name": "Ratnamani Metals", "sector": "Metals"},
+            "ROUTE": {"name": "Route Mobile", "sector": "Telecommunications"},
+            "SAFARI": {"name": "Safari Industries", "sector": "Consumer Goods"},
+            "SHYAMMETL": {"name": "Shyam Metalics", "sector": "Metals"},
+            "SIGNATURE": {"name": "Signature Global", "sector": "Real Estate"},
+            "SYNGENE": {"name": "Syngene International", "sector": "Pharmaceuticals"},
+            "TANLA": {"name": "Tanla Platforms", "sector": "Telecommunications"},
+            "UCOBANK": {"name": "UCO Bank", "sector": "Banking"},
+            "UJJIVAN": {"name": "Ujjivan Small Finance Bank", "sector": "Banking"},
+            "UTIAMC": {"name": "UTI Asset Management", "sector": "Financial Services"},
+        }
+
+        # Transform and merge all stocks
+        self.indian_stocks = {}
+
+        # Process Nifty 50 (Large Cap)
+        for symbol, info in nifty_50.items():
+            sector = info.get('sector', 'Default')
+            self.indian_stocks[symbol] = {
+                'name': info.get('name', symbol),
+                'sector': sector,
+                'market_cap': 'Large',
+                'div_yield': sector_div_yields.get(sector, sector_div_yields['Default'])
             }
-            if not self.indian_stocks:
-                raise ValueError("Stock database initialization failed - empty database")
-            logger.info(f"Initialized internal stock database with {len(self.indian_stocks)} symbols")
-        except Exception as e:
-            logger.error(f"Error initializing stock database: {e}")
-            self.indian_stocks = { # Minimal fallback
-                 "RELIANCE": {"name": "Reliance Industries", "sector": "Oil & Gas", "market_cap": "Large", "div_yield": 0.003},
-                 "TCS": {"name": "Tata Consultancy Services", "sector": "Information Technology", "market_cap": "Large", "div_yield": 0.025},
-                 "HDFCBANK": {"name": "HDFC Bank", "sector": "Banking", "market_cap": "Large", "div_yield": 0.012},
+
+        # Process Nifty Next 50 (Large Cap)
+        for symbol, info in nifty_next_50.items():
+            sector = info.get('sector', 'Default')
+            self.indian_stocks[symbol] = {
+                'name': info.get('name', symbol),
+                'sector': sector,
+                'market_cap': 'Large',
+                'div_yield': sector_div_yields.get(sector, sector_div_yields['Default'])
             }
-            logger.warning(f"Using fallback database with {len(self.indian_stocks)} stocks")
 
+        # Process Midcap 100 (Mid Cap)
+        for symbol, info in nifty_midcap_100.items():
+            sector = info.get('sector', 'Default')
+            self.indian_stocks[symbol] = {
+                'name': info.get('name', symbol),
+                'sector': sector,
+                'market_cap': 'Mid',
+                'div_yield': sector_div_yields.get(sector, sector_div_yields['Default'])
+            }
 
-   
+        # Process Smallcap stocks (Small Cap)
+        for symbol, info in smallcap_stocks.items():
+            sector = info.get('sector', 'Default')
+            self.indian_stocks[symbol] = {
+                'name': info.get('name', symbol),
+                'sector': sector,
+                'market_cap': 'Small',
+                'div_yield': sector_div_yields.get(sector, sector_div_yields['Default'])
+            }
 
+        if not self.indian_stocks:
+            raise ValueError("Stock database initialization failed - empty database")
+            
+        # Detailed logging
+        large_cap_count = sum(1 for s in self.indian_stocks.values() if s['market_cap'] == 'Large')
+        mid_cap_count = sum(1 for s in self.indian_stocks.values() if s['market_cap'] == 'Mid')
+        small_cap_count = sum(1 for s in self.indian_stocks.values() if s['market_cap'] == 'Small')
+        
+        logger.info(f"✅ Initialized internal stock database with {len(self.indian_stocks)} symbols")
+        logger.info(f"   - Large Cap: {large_cap_count} stocks (Nifty 50 + Next 50)")
+        logger.info(f"   - Mid Cap: {mid_cap_count} stocks (Midcap 100)")
+        logger.info(f"   - Small Cap: {small_cap_count} stocks")
+        
+    except Exception as e:
+        logger.error(f"Error initializing stock database: {e}")
+        # Minimal fallback database
+        self.indian_stocks = {
+            "RELIANCE": {"name": "Reliance Industries", "sector": "Oil & Gas", "market_cap": "Large", "div_yield": 0.045},
+            "TCS": {"name": "Tata Consultancy Services", "sector": "Information Technology", "market_cap": "Large", "div_yield": 0.020},
+            "HDFCBANK": {"name": "HDFC Bank", "sector": "Banking", "market_cap": "Large", "div_yield": 0.010},
+            "INFY": {"name": "Infosys", "sector": "Information Technology", "market_cap": "Large", "div_yield": 0.020},
+            "ICICIBANK": {"name": "ICICI Bank", "sector": "Banking", "market_cap": "Large", "div_yield": 0.010},
+        }
+        logger.warning(f"⚠️ Using fallback database with {len(self.indian_stocks)} stocks")
 
     # ==============================================================================
     #  CALCULATION METHODS (Kept as is - depend on DataFrame and fundamentals dict)
@@ -1486,5 +1772,6 @@ if __name__ == "__main__":
     # except Exception as e:
     #      print(f"An error occurred during test: {e}")
     #      traceback.print_exc()
+
 
 
