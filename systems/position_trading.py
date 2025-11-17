@@ -494,7 +494,6 @@ class EnhancedPositionTradingSystem:
     #  DATABASE INITIALIZATION (Kept as is - internal symbol info)
     # ==============================================================================
     def initialize_stock_database(self):
-    """Initialize comprehensive Indian stock database with fundamental data structure"""
     try:
         # Sector-based dividend yield estimates
         sector_div_yields = {
@@ -1772,6 +1771,7 @@ if __name__ == "__main__":
     # except Exception as e:
     #      print(f"An error occurred during test: {e}")
     #      traceback.print_exc()
+
 
 
 
