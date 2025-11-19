@@ -14,6 +14,25 @@ from data_providers import StockDataProvider
 from symbol_mapper import SymbolMapper
 
 
+# --- SEBI COMPLIANCE DISCLAIMER ---
+SEBI_DISCLAIMER = {
+    "text": (
+        "The information, analysis, scores, recommendations, and signals provided by this application "
+        "are generated algorithmically for informational and educational purposes only. They do NOT constitute "
+        "investment advice, financial advice, portfolio management services, or research analysis as defined under "
+        "SEBI regulations. We are NOT registered with SEBI as an Investment Adviser, Research Analyst, Portfolio "
+        "Manager, or Stock Broker. Users must NOT rely solely on this information for making investment decisions. "
+        "Stock market investments are subject to market risks, including the potential loss of principal. Users are "
+        "strongly advised to conduct independent research and consult a SEBI-registered Investment Adviser or financial "
+        "professional before making any investment decisions. Past performance is not indicative of future results. "
+        "The application and its creators assume no liability for any financial losses incurred based on the use of "
+        "this information."
+    ),
+    "version": "1.0",
+    "last_updated": "2024-11-19"
+}
+
+
 # --- Graceful Import of Trading Systems ---
 SYSTEMS_AVAILABLE = False
 try:
@@ -28,12 +47,8 @@ except ImportError as e:
 app = Flask(__name__)
 
 # --- Secure CORS Configuration ---
-# Define the live URL of your React frontend
 FRONTEND_URL = "https://sentiquant-frontend.onrender.com"  
-
-# Allow requests *only* from your frontend URL
 CORS(app, resources={r"/api/*": {"origins": FRONTEND_URL}})
-# --- End of CORS Setup ---
 
 # --- Logging Configuration ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -73,9 +88,20 @@ def validate_time_period(time_period):
         raise ValueError("Time period must be a valid integer")
 
 
-# --- In-Memory Cache REMOVED ---
-# The simple_cache, get_from_cache, and set_cache functions have been removed.
-# Caching is now handled exclusively by the RedisCache inside StockDataProvider.
+# --- Global Disclaimer Injection ---
+@app.after_request
+def inject_disclaimer(response):
+    """Automatically inject SEBI disclaimer into all JSON API responses"""
+    if response.content_type == 'application/json' and response.status_code == 200:
+        try:
+            data = response.get_json()
+            if isinstance(data, dict) and 'disclaimer' not in data:
+                data['disclaimer'] = SEBI_DISCLAIMER
+                response.data = jsonify(data).data
+        except Exception as e:
+            logger.debug(f"Could not inject disclaimer: {e}")
+    return response
+
 
 class TradingAPI:
     """Handles all trading logic and system interactions."""
@@ -135,36 +161,28 @@ class TradingAPI:
             return
         
         try:
-            # Pass data_provider to swing system
             self.swing_system = EnhancedSwingTradingSystem(data_provider=self.data_provider)
             logger.info("✅ EnhancedSwingTradingSystem initialized successfully.")
         except Exception:
             logger.critical("❌ FAILED to initialize EnhancedSwingTradingSystem", exc_info=True)
 
         try:
-            # Pass data_provider to position system
             self.position_system = EnhancedPositionTradingSystem(data_provider=self.data_provider)
             logger.info("✅ EnhancedPositionTradingSystem initialized successfully.")
         except Exception:
             logger.critical("❌ FAILED to initialize EnhancedPositionTradingSystem", exc_info=True)
 
     def _clean_fundamental_data(self, fundamentals):
-        """
-        Sanitizes fundamental data points for display.
-        This function no longer touches percentage values.
-        """
+        """Sanitizes fundamental data points for display."""
         if not isinstance(fundamentals, dict):
             return {}
 
         cleaned_data = fundamentals.copy()
 
-        # Format Market Cap for readability (this is safe)
+        # Format Market Cap for readability
         key = 'market_cap'
         if key in cleaned_data and isinstance(cleaned_data[key], (int, float)):
             cleaned_data[key] = f"{cleaned_data[key]:,}"
-        
-        # All other values (including percentages) are passed as raw numbers.
-        # The frontend will be responsible for formatting 0.15 as "0.15%".
         
         return cleaned_data
 
@@ -200,7 +218,6 @@ class TradingAPI:
 
             current_price = result.get('current_price', 0)
 
-            # Format the complete trading plan
             formatted_plan = {
                 'signal': entry_signal,
                 'strategy': self._enhance_strategy_description(entry_strategy, entry_signal, system_type),
@@ -277,7 +294,6 @@ class TradingAPI:
             sentiment_data['mda_tone'] = result['mda_analysis'].get('tone')
             sentiment_data['mda_score'] = result['mda_analysis'].get('score')
         
-        # Call the FIXED _clean_fundamental_data function
         cleaned_fundamentals = self._clean_fundamental_data(result.get('fundamentals', {}))
 
         system_technicals = result.get('technical_indicators', {})
@@ -300,7 +316,7 @@ class TradingAPI:
             'potential_return': potential_return,
             'trading_plan': trading_plan,
             'technical_indicators': final_technicals,
-            'fundamentals': cleaned_fundamentals, # This now contains correctly formatted data
+            'fundamentals': cleaned_fundamentals,
             'sentiment': sentiment_data,
             'time_horizon': "1-4 weeks" if system_type == "Swing" else "6-18 months"
         }
@@ -311,7 +327,6 @@ class TradingAPI:
 
         standardized_list = []
         for item in portfolio_list:
-            # More robustly extract values with multiple fallbacks, mirroring frontend logic
             price = item.get('price') or item.get('current_price') or item.get('entry_price') or item.get(
                 'avg_price') or item.get('ltp') or 0
             stop_loss = item.get('stop_loss') or item.get('stoploss') or item.get('sl') or item.get('stop') or 0
@@ -395,7 +410,6 @@ trading_api = TradingAPI()
 # --- API Endpoints ---
 @app.route('/api/stocks', methods=['GET'])
 def get_all_stocks():
-    # In-memory cache removed. Relies on RedisCache in StockDataProvider.
     if not trading_api.swing_system:
         return jsonify({'success': False, 'error': 'Trading system not available'}), 503
     stocks = trading_api.swing_system.get_all_stock_symbols()
@@ -407,17 +421,13 @@ def analyze_stock(system_type, symbol):
     try:
         symbol = validate_symbol(symbol)
         
-        # In-memory cache removed. Relies on RedisCache in StockDataProvider.
-        
         system = getattr(trading_api, f"{system_type}_system")
         if not system:
             return jsonify(
                 {'success': False, 'error': f'{system_type.capitalize()} trading system not available'}), 503
         
-        # Determine the correct analysis function name
         analysis_func_name = f"analyze_{system_type}_trading_stock"
         if not hasattr(system, analysis_func_name):
-            # Fallback for EnhancedSwingTradingSystem
             analysis_func_name = "analyze_swing_trading_stock"
             if not hasattr(system, analysis_func_name):
                  raise AttributeError(f"Could not find analysis function for {system_type}")
@@ -431,7 +441,6 @@ def analyze_stock(system_type, symbol):
         
         formatted_result = trading_api.format_analysis_response(result, system_type.capitalize())
         
-        # In-memory cache removed.
         return jsonify({'success': True, 'data': formatted_result})
     
     except ValueError as e:
@@ -491,8 +500,6 @@ def compare_strategies_endpoint(symbol):
     try:
         symbol = validate_symbol(symbol)
         
-        # In-memory cache removed.
-        
         if not trading_api.swing_system or not trading_api.position_system:
             return jsonify(
                 {'success': False, 'error': 'One or more trading systems are unavailable'}), 503
@@ -508,7 +515,6 @@ def compare_strategies_endpoint(symbol):
         position_formatted = trading_api.format_analysis_response(position_result, 'Position')
         result = {'swing_analysis': swing_formatted, 'position_analysis': position_formatted}
         
-        # In-memory cache removed.
         return jsonify({'success': True, 'data': result})
     
     except ValueError as e:
@@ -517,16 +523,6 @@ def compare_strategies_endpoint(symbol):
         logger.error(f"Error in compare/{symbol}: {e}\n{traceback.format_exc()}")
         return jsonify({'success': False, 'error': 'An internal server error occurred'}), 500
 
-
-# --- Error Handlers ---
-@app.errorhandler(404)
-def not_found(error):
-    return jsonify({'success': False, 'error': 'Endpoint not found'}), 404
-
-
-@app.errorhandler(500)
-def internal_error(error):
-    return jsonify({'success': False, 'error': 'Internal server error'}), 500
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
@@ -553,20 +549,36 @@ def health_check():
         'components': status
     }), 200 if all_healthy else 503
 
+
+@app.route('/api/disclaimer', methods=['GET'])
+def get_disclaimer():
+    """Dedicated endpoint to fetch the SEBI disclaimer"""
+    return jsonify({
+        'success': True,
+        'data': SEBI_DISCLAIMER
+    })
+
+
+# --- Error Handlers ---
+@app.errorhandler(404)
+def not_found(error):
+    return jsonify({'success': False, 'error': 'Endpoint not found'}), 404
+
+
+@app.errorhandler(500)
+def internal_error(error):
+    return jsonify({'success': False, 'error': 'Internal server error'}), 500
+
+
 if __name__ == "__main__":
-    
-    # Get port from environment or default to 5000
     port = int(os.environ.get("PORT", 5000))
     
-    # Use waitress for production
     try:
         from waitress import serve
-        # Prevent duplicate logs in Render logs
         logging.getLogger('waitress').setLevel(logging.WARNING)
         logger.info(f"Starting production server with Waitress on port {port}...")
         serve(app, host="0.0.0.0", port=port)
     except ImportError:
-        # Fallback to Flask dev server if waitress isn't installed (for local testing)
         logger.warning("Waitress not found. Falling back to Flask dev server.")
         logger.warning("DO NOT use the Flask dev server in production.")
         app.run(host="0.0.0.0", port=port, debug=False)
