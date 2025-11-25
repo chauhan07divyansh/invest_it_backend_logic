@@ -1,7 +1,7 @@
-# Keep all other imports as-is
 import os
 import logging
 import traceback
+import time
 from datetime import datetime
 from typing import Dict, List, Optional
 import numpy as np
@@ -547,7 +547,7 @@ class EnhancedPositionTradingSystem:
             return []
 
     # ==============================================================================
-    #  DATABASE INITIALIZATION (Corrected Indentation)
+    #  DATABASE INITIALIZATION
     # ==============================================================================
     def initialize_stock_database(self):
         """Initialize comprehensive Indian stock database with fundamental data structure"""
@@ -928,7 +928,7 @@ class EnhancedPositionTradingSystem:
     # ==============================================================================
     #  CALCULATION METHODS (Kept as is - depend on DataFrame and fundamentals dict)
     # ==============================================================================
-   def calculate_fundamental_score(self, fundamentals, sector):
+    def calculate_fundamental_score(self, fundamentals, sector):
         """Calculate fundamental score based on provided fundamentals dict."""
         try:
             score = 0
@@ -1258,9 +1258,9 @@ class EnhancedPositionTradingSystem:
                 recent_vol = self.safe_rolling_calculation(data['Volume'], 20, 'mean').iloc[-1]
                 long_vol = self.safe_rolling_calculation(data['Volume'], 50, 'mean').iloc[-1]
                 if not pd.isna(recent_vol) and not pd.isna(long_vol) and long_vol > 0:
-                     volume_ratio = recent_vol / long_vol
-                     if volume_ratio > 1.2: technical_score += 15
-                     elif volume_ratio > 1.0: technical_score += 10
+                      volume_ratio = recent_vol / long_vol
+                      if volume_ratio > 1.2: technical_score += 15
+                      elif volume_ratio > 1.0: technical_score += 10
             
             # Long-term MACD (26, 52, 18)
             macd_line, signal_line, histogram = self.calculate_macd(data['Close'], fast=26, slow=52, signal=18)
@@ -1390,8 +1390,8 @@ class EnhancedPositionTradingSystem:
             rr_ratio = upside_pot / stop_dist_pct if stop_dist_pct > 0 else 0
 
             trade_management_note = ("Book partial profits at targets (e.g., 1/3 each). "
-                                    "Trail stop loss to breakeven after Target 1. "
-                                    "Review fundamentals quarterly.")
+                                     "Trail stop loss to breakeven after Target 1. "
+                                     "Review fundamentals quarterly.")
 
             return {
                 'entry_signal': entry_signal, 'entry_strategy': entry_strategy, 'entry_timing': entry_timing,
@@ -1735,19 +1735,19 @@ class EnhancedPositionTradingSystem:
                 num_shares = int(capital_at_risk_per_trade / risk_per_share)
 
                 if num_shares == 0:
-                     logger.warning(f"Skipping {stock_data.get('symbol')}: Cannot afford even one share with risk {risk_per_share:.2f} per share.")
-                     continue
+                      logger.warning(f"Skipping {stock_data.get('symbol')}: Cannot afford even one share with risk {risk_per_share:.2f} per share.")
+                      continue
 
                 investment_amount = num_shares * current_price
                 trade_risk = num_shares * risk_per_share # Actual capital risked on this trade
 
                 # Check budget and total portfolio risk constraints
                 if total_allocated + investment_amount > total_capital:
-                     logger.info(f"Stopping allocation for {stock_data.get('symbol')}: Exceeds total budget.")
-                     break # Stop adding stocks if budget exceeded
+                      logger.info(f"Stopping allocation for {stock_data.get('symbol')}: Exceeds total budget.")
+                      break # Stop adding stocks if budget exceeded
                 if current_total_risk + trade_risk > max_total_risk:
-                     logger.info(f"Stopping allocation for {stock_data.get('symbol')}: Exceeds max portfolio risk.")
-                     break # Stop adding stocks if max portfolio risk exceeded
+                      logger.info(f"Stopping allocation for {stock_data.get('symbol')}: Exceeds max portfolio risk.")
+                      break # Stop adding stocks if max portfolio risk exceeded
 
 
                 total_allocated += investment_amount
@@ -1863,5 +1863,3 @@ if __name__ == "__main__":
     logger = logging.getLogger(__name__)
     
     print("System Position Trading module loaded.")
-
-
