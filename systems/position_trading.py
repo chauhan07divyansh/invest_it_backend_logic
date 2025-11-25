@@ -929,102 +929,181 @@ class EnhancedPositionTradingSystem:
     #  CALCULATION METHODS (Kept as is - depend on DataFrame and fundamentals dict)
     # ==============================================================================
     def calculate_fundamental_score(self, fundamentals, sector):
-        """Calculate fundamental score based on provided fundamentals dict."""
-        try:
-            score = 0
-            max_score = 100
-
-            # P/E Ratio (check if not None and numeric)
-            pe_ratio = fundamentals.get('pe_ratio')
-            if isinstance(pe_ratio, (int, float)):
-                if 8 < pe_ratio < 25: score += 15
-                elif 5 < pe_ratio <= 8: score += 12
-                elif 25 <= pe_ratio < 40: score += 5  # Relaxed this from 35 to 40
-            
-            # PEG Ratio
-            peg_ratio = fundamentals.get('peg_ratio')
-            if isinstance(peg_ratio, (int, float)):
-                 if 0.5 < peg_ratio < 1.0: score += 15
-                 elif 1.0 <= peg_ratio < 1.5: score += 10
-                 
-            # Growth
-            rev_g = fundamentals.get('revenue_growth') or fundamentals.get('sales_growth_3y')
-            earn_g = fundamentals.get('earnings_growth') or fundamentals.get('profit_growth_3y')
-
-            if isinstance(rev_g, (int, float)):
-                 rev_g_pct = rev_g / 100.0  # <-- CORRECTED
-                 if rev_g_pct > 0.20: score += 10
-                 elif rev_g_pct > 0.15: score += 8
-                 elif rev_g_pct > 0.10: score += 5
-                 
-            if isinstance(earn_g, (int, float)):
-                 earn_g_pct = earn_g / 100.0  # <-- CORRECTED
-                 if earn_g_pct > 0.25: score += 10
-                 elif earn_g_pct > 0.15: score += 8
-                 elif earn_g_pct > 0.10: score += 5
-
-            # ROE
-            roe = fundamentals.get('roe')
-            if isinstance(roe, (int, float)):
-                 roe_pct = roe / 100.0  # <-- CORRECTED
-                 if roe_pct > 0.20: score += 10
-                 elif roe_pct > 0.15: score += 8
-                 elif roe_pct > 0.12: score += 5
-
-            # Debt to Equity
-            debt_equity = fundamentals.get('debt_to_equity')
-            if isinstance(debt_equity, (int, float)):
-                 if debt_equity < 0.3: score += 10
-                 elif debt_equity < 0.6: score += 8
-                 elif debt_equity < 1.0: score += 4
-
-            # Profitability
-            profit_margin = fundamentals.get('profit_margin')
-            op_margin = fundamentals.get('operating_margin')
-            
-            if isinstance(profit_margin, (int, float)):
-                 pm_pct = profit_margin / 100.0  # <-- CORRECTED
-                 if pm_pct > 0.15: score += 5
-                 elif pm_pct > 0.10: score += 3
-                 
-            if isinstance(op_margin, (int, float)):
-                 opm_pct = op_margin / 100.0  # <-- CORRECTED
-                 if opm_pct > 0.20: score += 5
-                 elif opm_pct > 0.15: score += 3
-
-            # Dividend Yield
-            div_yield = fundamentals.get('dividend_yield')
-            if isinstance(div_yield, (int, float)):
-                 div_yield_pct = div_yield / 100.0  # <-- CORRECTED
-                 if div_yield_pct > 0.03: score += 10
-                 elif div_yield_pct > 0.015: score += 6
-                 elif div_yield_pct > 0.005: score += 3
-            
-            # Check Expected Div Yield (from internal db) as a fallback
-            elif fundamentals.get('expected_div_yield', 0) > 0:
-                 div_yield_pct = fundamentals.get('expected_div_yield', 0) # Already a decimal
-                 if div_yield_pct > 0.03: score += 10
-                 elif div_yield_pct > 0.015: score += 6
-                 elif div_yield_pct > 0.005: score += 3
-
-            # Financial Health
-            current_ratio = fundamentals.get('current_ratio')
-            pb_ratio = fundamentals.get('price_to_book')
-            
-            if isinstance(current_ratio, (int, float)):
-                 if current_ratio > 1.5: score += 5
-                 elif current_ratio > 1.2: score += 3
-                 
-            if isinstance(pb_ratio, (int, float)):
-                 if pb_ratio < 2.0: score += 5
-                 elif pb_ratio < 3.0: score += 3
-
-            return min(score, max_score)
+    """Calculate fundamental score based on provided fundamentals dict."""
+    try:
+        score = 0
+        max_score = 100
         
-        except Exception as e:
-            logger.error(f"Error calculating fundamental score: {e}")
-            return 0
+        # Helper to safely get numeric value
+        def get_value(key, default=None):
+            val = fundamentals.get(key, default)
+            if val is None or not isinstance(val, (int, float)):
+                return default
+            return val
 
+        # === P/E Ratio (20 points max) ===
+        pe_ratio = get_value('pe_ratio')
+        if pe_ratio is not None:
+            if 10 <= pe_ratio <= 25:
+                score += 20
+            elif 8 <= pe_ratio < 10 or 25 < pe_ratio <= 35:
+                score += 15
+            elif 5 <= pe_ratio < 8 or 35 < pe_ratio <= 45:
+                score += 10
+            elif pe_ratio > 0:  # Any positive P/E gets something
+                score += 5
+        
+        # === PEG Ratio (15 points max) ===
+        peg_ratio = get_value('peg_ratio')
+        if peg_ratio is not None and peg_ratio > 0:
+            if 0.5 <= peg_ratio <= 1.0:
+                score += 15
+            elif 1.0 < peg_ratio <= 1.5:
+                score += 12
+            elif 1.5 < peg_ratio <= 2.0:
+                score += 8
+            elif peg_ratio < 0.5 or (2.0 < peg_ratio <= 3.0):
+                score += 5
+        
+        # === Revenue Growth (15 points max) ===
+        # CRITICAL FIX: Assume values are ALREADY percentages (e.g., 15.5 means 15.5%)
+        # Don't divide by 100 again!
+        rev_growth = get_value('revenue_growth') or get_value('sales_growth_3y')
+        if rev_growth is not None:
+            # Treat as percentage directly
+            if rev_growth >= 20:
+                score += 15
+            elif rev_growth >= 15:
+                score += 12
+            elif rev_growth >= 10:
+                score += 9
+            elif rev_growth >= 5:
+                score += 6
+            elif rev_growth >= 0:
+                score += 3  # Positive growth gets something
+        
+        # === Earnings Growth (15 points max) ===
+        earn_growth = get_value('earnings_growth') or get_value('profit_growth_3y')
+        if earn_growth is not None:
+            if earn_growth >= 25:
+                score += 15
+            elif earn_growth >= 20:
+                score += 12
+            elif earn_growth >= 15:
+                score += 9
+            elif earn_growth >= 10:
+                score += 6
+            elif earn_growth >= 0:
+                score += 3
+
+        # === ROE (12 points max) ===
+        roe = get_value('roe')
+        if roe is not None:
+            if roe >= 20:
+                score += 12
+            elif roe >= 15:
+                score += 10
+            elif roe >= 12:
+                score += 7
+            elif roe >= 8:
+                score += 4
+            elif roe > 0:
+                score += 2
+
+        # === Debt to Equity (10 points max) ===
+        debt_equity = get_value('debt_to_equity')
+        if debt_equity is not None:
+            if debt_equity < 0.3:
+                score += 10
+            elif debt_equity < 0.5:
+                score += 8
+            elif debt_equity < 0.8:
+                score += 6
+            elif debt_equity < 1.2:
+                score += 4
+            elif debt_equity < 2.0:
+                score += 2
+
+        # === Profit Margin (8 points max) ===
+        profit_margin = get_value('profit_margin')
+        if profit_margin is not None:
+            if profit_margin >= 15:
+                score += 8
+            elif profit_margin >= 10:
+                score += 6
+            elif profit_margin >= 7:
+                score += 4
+            elif profit_margin > 0:
+                score += 2
+        
+        # === Operating Margin (7 points max) ===
+        op_margin = get_value('operating_margin')
+        if op_margin is not None:
+            if op_margin >= 20:
+                score += 7
+            elif op_margin >= 15:
+                score += 5
+            elif op_margin >= 10:
+                score += 3
+            elif op_margin > 0:
+                score += 1
+
+        # === Dividend Yield (10 points max) ===
+        div_yield = get_value('dividend_yield')
+        
+        # Try actual dividend yield first
+        if div_yield is not None and div_yield > 0:
+            if div_yield >= 3.0:
+                score += 10
+            elif div_yield >= 2.0:
+                score += 8
+            elif div_yield >= 1.5:
+                score += 6
+            elif div_yield >= 1.0:
+                score += 4
+            elif div_yield > 0:
+                score += 2
+        else:
+            # Fallback to expected div yield (already as decimal like 0.02)
+            expected_div = get_value('expected_div_yield', 0)
+            if expected_div > 0:
+                div_yield_pct = expected_div * 100  # Convert to percentage
+                if div_yield_pct >= 3.0:
+                    score += 10
+                elif div_yield_pct >= 2.0:
+                    score += 7
+                elif div_yield_pct >= 1.0:
+                    score += 5
+                elif div_yield_pct > 0:
+                    score += 2
+
+        # === Current Ratio (5 points max) ===
+        current_ratio = get_value('current_ratio')
+        if current_ratio is not None:
+            if current_ratio >= 2.0:
+                score += 5
+            elif current_ratio >= 1.5:
+                score += 4
+            elif current_ratio >= 1.2:
+                score += 3
+            elif current_ratio >= 1.0:
+                score += 2
+        
+        # === Price to Book (3 points max) ===
+        pb_ratio = get_value('price_to_book')
+        if pb_ratio is not None and pb_ratio > 0:
+            if pb_ratio < 1.5:
+                score += 3
+            elif pb_ratio < 2.5:
+                score += 2
+            elif pb_ratio < 4.0:
+                score += 1
+
+        return min(score, max_score)
+    
+    except Exception as e:
+        logger.error(f"Error calculating fundamental score: {e}")
+        return 0
 
     def analyze_long_term_trends(self, data):
         """Analyze long-term trends from OHLCV DataFrame."""
@@ -1789,3 +1868,4 @@ if __name__ == "__main__":
     logger = logging.getLogger(__name__)
     
     print("System Position Trading module loaded.")
+
