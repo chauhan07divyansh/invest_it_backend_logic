@@ -1,45 +1,45 @@
+# hf_utils.py
+
 import os
-from huggingface_hub import hf_hub_download
+import requests
+import logging
 
-# This is your unique Hugging Face Repository ID
-REPO_ID = "Brosoverhoes07/finance_models"
+# It's better to create a single, reusable session object for performance
+# as it reuses the underlying TCP connection.
+session = requests.Session()
 
-def download_model_file(filename):
+# The API Key is automatically read from the environment variable set in Render
+HF_API_KEY = os.getenv("HF_API_KEY")
+if HF_API_KEY:
+    session.headers.update({"Authorization": f"Bearer {HF_API_KEY}"})
+
+def query_hf_api(api_url: str, payload: dict, timeout: int = 20) -> list | None:
     """
-    Downloads a specific file from Hugging Face and returns the local path.
+    Sends a payload to a specified Hugging Face API endpoint and returns the result.
+
+    Args:
+        api_url (str): The full URL of the Hugging Face Space API endpoint.
+        payload (dict): The data to send, typically formatted as {"inputs": ...}.
+        timeout (int): How many seconds to wait for a response.
+
+    Returns:
+        A list containing the model's predictions, or None if an error occurs.
     """
-    print(f"--- Initiating download for: {filename} ---")
-    
-    # We use the HF_TOKEN you will set in Render's dashboard
-    token = os.getenv("HF_TOKEN")
-    
-    try:
-        # This downloads the file to a cache folder on Render
-        file_path = hf_hub_download(
-            repo_id=REPO_ID,
-            filename=filename,
-            token=token
-        )
-        print(f"--- Successfully downloaded to: {file_path} ---")
-        return file_path
-    except Exception as e:
-        print(f"--- Error downloading {filename}: {e} ---")
+    if not api_url:
+        logging.error("Hugging Face API URL is not configured.")
         return None
 
+    try:
+        response = session.post(api_url, json=payload, timeout=timeout)
+        
+        # This will automatically raise an exception for HTTP errors (like 4xx, 5xx)
+        response.raise_for_status()
+        
+        return response.json()
 
-
-def get_all_models():
-    """
-    Helper to fetch the main model files needed for the project.
-    """
-    files_to_download = [
-        "best_model_fold_1.pth",
-        "sbert_rf_pipeline.pkl",
-        "sentiment_pipeline_chunking.joblib"
-    ]
-    
-    paths = {}
-    for file in files_to_download:
-        paths[file] = download_model_file(file)
-    
-    return paths
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Failed to query Hugging Face API at {api_url}: {e}")
+        return None
+    except Exception as e:
+        logging.error(f"An unexpected error occurred during the API call: {e}")
+        return None
