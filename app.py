@@ -16,20 +16,20 @@ from symbol_mapper import SymbolMapper
 
 # --- SEBI COMPLIANCE DISCLAIMER ---
 SEBI_DISCLAIMER = {
-    "text": (
-        "The information, analysis, scores, recommendations, and signals provided by this application "
-        "are generated algorithmically for informational and educational purposes only. They do NOT constitute "
-        "investment advice, financial advice, portfolio management services, or research analysis as defined under "
-        "SEBI regulations. We are NOT registered with SEBI as an Investment Adviser, Research Analyst, Portfolio "
-        "Manager, or Stock Broker. Users must NOT rely solely on this information for making investment decisions. "
-        "Stock market investments are subject to market risks, including the potential loss of principal. Users are "
-        "strongly advised to conduct independent research and consult a SEBI-registered Investment Adviser or financial "
-        "professional before making any investment decisions. Past performance is not indicative of future results. "
-        "The application and its creators assume no liability for any financial losses incurred based on the use of "
-        "this information."
-    ),
-    "version": "1.0",
-    "last_updated": "2024-11-19"
+    "text": (
+        "The information, analysis, scores, recommendations, and signals provided by this application "
+        "are generated algorithmically for informational and educational purposes only. They do NOT constitute "
+        "investment advice, financial advice, portfolio management services, or research analysis as defined under "
+        "SEBI regulations. We are NOT registered with SEBI as an Investment Adviser, Research Analyst, Portfolio "
+        "Manager, or Stock Broker. Users must NOT rely solely on this information for making investment decisions. "
+        "Stock market investments are subject to market risks, including the potential loss of principal. Users are "
+        "strongly advised to conduct independent research and consult a SEBI-registered Investment Adviser or financial "
+        "professional before making any investment decisions. Past performance is not indicative of future results. "
+        "The application and its creators assume no liability for any financial losses incurred based on the use of "
+        "this information."
+    ),
+    "version": "1.0",
+    "last_updated": "2024-11-19"
 }
 
 
