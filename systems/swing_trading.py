@@ -967,7 +967,23 @@ class EnhancedSwingTradingSystem:
             response = requests.get(url, timeout=10)
             if response.status_code == 200:
                 data = response.json()
-                articles = [a['title'] for a in data.get('articles', []) if a.get('title')]
+                articles = []
+
+                for a in data.get("articles", []):
+                    title = a.get("title")
+                    desc = a.get("description")
+
+                    if title:
+                        full_text = title
+
+                        if desc:
+                            full_text += f". {desc}"
+
+                        full_text += ". This news discusses potential financial and market impact."
+
+                        articles.append(full_text)
+
+
                 
                 if articles:
                     # Cache news
@@ -1662,6 +1678,7 @@ if __name__ == "__main__":
     print("\n" + "="*70)
     print("✅ System ready for production use!")
     print("="*70)
+
 
 
 
