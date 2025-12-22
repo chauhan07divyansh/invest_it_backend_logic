@@ -53,7 +53,7 @@ class EnhancedSwingTradingSystem:
             # API configuration
             self.sentiment_api_url = config.HF_SENTIMENT_API_URL
             self.model_api_available = bool(self.sentiment_api_url)
-            self.model_type = "SBERT API" if self.model_api_available else "TextBlob"
+            
             
             # Data provider injection
             self.data_provider = data_provider
@@ -999,25 +999,47 @@ class EnhancedSwingTradingSystem:
             return [f"Market analysis for {symbol}"]
     
     def _analyze_sentiment_via_api(self, articles: List[str]) -> Optional[Tuple]:
-        """Analyze sentiment via Hugging Face API"""
+        """Analyze sentiment via Hugging Face SBERT Space (FIXED)"""
         try:
             payload = {"inputs": articles}
-            api_results = query_hf_api(self.sentiment_api_url, payload)
-            
-            if api_results is None:
+            api_response = query_hf_api(self.sentiment_api_url, payload)
+
+            if not api_response:
+                logger.error("HF API returned None")
                 return None
-            
-            if isinstance(api_results, list) and len(api_results) > 0 and isinstance(api_results[0], list):
-                api_results = api_results[0]
-            
-            sentiments = [res.get('label', 'neutral').lower() for res in api_results]
-            confidences = [res.get('score', 0.5) for res in api_results]
-            
+
+            if not api_response.get("success", False):
+                logger.error(f"HF API unsuccessful: {api_response}")
+                return None
+
+            results = api_response.get("results")
+            if not isinstance(results, list) or not results:
+                logger.error(f"HF API results invalid: {api_response}")
+                return None
+
+            sentiments = []
+            confidences = []
+
+            for item in results:
+                label = item.get("label")
+                confidence = item.get("confidence", 0.5)
+
+                if not label:
+                    continue
+
+                sentiments.append(label.lower())
+                confidences.append(float(confidence))
+
+            if not sentiments:
+                return None
+
             return sentiments, confidences
-            
+
         except Exception as e:
-            logger.error(f"Error in API sentiment analysis: {e}")
+            logger.error(f"HF sentiment API error: {e}")
             return None
+
+
     
     def analyze_sentiment_with_textblob(self, articles: List[str]) -> Tuple:
         """Fallback sentiment analysis with TextBlob"""
@@ -1053,11 +1075,12 @@ class EnhancedSwingTradingSystem:
     def analyze_news_sentiment(self, symbol: str, num_articles: int = 15) -> Tuple:
         """Main sentiment analysis function"""
         try:
-            articles = self.fetch_indian_news(symbol, num_articles) or self.get_sample_news(symbol)
-            news_source = "Real news" if self.fetch_indian_news(symbol, num_articles) else "Sample"
-            
+            articles = self.fetch_indian_news(symbol, num_articles)
+            news_source = "Real news" if articles else "Sample"
+
             if not articles:
-                return [], [], [], "No Analysis", "No Source"
+                articles = self.get_sample_news(symbol)
+
             
             # Try API first
             if self.model_api_available:
@@ -1169,7 +1192,8 @@ class EnhancedSwingTradingSystem:
             
             # Sentiment Score
             if sentiment_data and len(sentiment_data) >= 3:
-                sentiments, _, confidences, _, _ = sentiment_data
+                sentiments = sentiment_data[0] if len(sentiment_data) > 0 else []
+                confidences = sentiment_data[2] if len(sentiment_data) > 2 else []
                 if sentiments and confidences:
                     sentiment_value = 0
                     total_weight = 0
@@ -1260,105 +1284,148 @@ class EnhancedSwingTradingSystem:
             return default_plan
     
     def analyze_swing_trading_stock(self, symbol: str, period: str = "6mo") -> Optional[Dict]:
-        """Main stock analysis function with caching"""
+        """Main stock analysis function with caching (FIXED + SAFE)"""
         try:
-            # Check cache
+            # --------------------------------------------------
+            # Cache check
+            # --------------------------------------------------
             cache_key = self._get_cache_key("analysis", symbol, period=period)
             cached_analysis = self._get_from_cache(cache_key)
             if cached_analysis:
                 logger.debug(f"⚡ Using cached analysis for {symbol}")
                 return cached_analysis
-            
-            # Fetch data
+
+            # --------------------------------------------------
+            # Fetch market data
+            # --------------------------------------------------
             data, info, final_symbol = self.get_indian_stock_data(symbol, period)
             if data is None or data.empty:
                 return None
-            
-            # Get stock info
+
+            # --------------------------------------------------
+            # Stock metadata
+            # --------------------------------------------------
             stock_info = self.get_stock_info_from_db(symbol)
-            sector = stock_info.get('sector', 'Unknown')
-            company_name = stock_info.get('name', symbol)
-            
-            # Current price
-            current_price = data['Close'].iloc[-1]
+            sector = stock_info.get("sector", "Unknown")
+            company_name = stock_info.get("name", symbol)
+
+            # --------------------------------------------------
+            # Price info
+            # --------------------------------------------------
+            current_price = data["Close"].iloc[-1]
             if len(data) >= 2:
-                price_change = data['Close'].iloc[-1] - data['Close'].iloc[-2]
-                price_change_pct = (price_change / data['Close'].iloc[-2]) * 100
+                price_change = data["Close"].iloc[-1] - data["Close"].iloc[-2]
+                price_change_pct = (price_change / data["Close"].iloc[-2]) * 100
             else:
-                price_change = 0
-                price_change_pct = 0
-            
+                price_change = 0.0
+                price_change_pct = 0.0
+
+            # --------------------------------------------------
             # Technical indicators
-            rsi = self.calculate_rsi(data['Close'])
-            bb_upper, bb_middle, bb_lower = self.calculate_bollinger_bands(data['Close'])
-            stoch_k, stoch_d = self.calculate_stochastic(data['High'], data['Low'], data['Close'])
-            macd_line, signal_line, histogram = self.calculate_macd(data['Close'])
+            # --------------------------------------------------
+            rsi = self.calculate_rsi(data["Close"])
+            bb_upper, bb_middle, bb_lower = self.calculate_bollinger_bands(data["Close"])
+            stoch_k, stoch_d = self.calculate_stochastic(data["High"], data["Low"], data["Close"])
+            macd_line, signal_line, histogram = self.calculate_macd(data["Close"])
             support, resistance = self.calculate_support_resistance(data)
-            
-            # Sentiment
+
+            # --------------------------------------------------
+            # Sentiment (SBERT → fallback TextBlob)
+            # --------------------------------------------------
             sentiment_results = self.analyze_news_sentiment(final_symbol)
-            
+
+            sentiments = sentiment_results[0] if len(sentiment_results) > 0 else []
+            articles = sentiment_results[1] if len(sentiment_results) > 1 else []
+            confidences = sentiment_results[2] if len(sentiment_results) > 2 else []
+            sentiment_method = sentiment_results[3] if len(sentiment_results) > 3 else "Unknown"
+            sentiment_source = sentiment_results[4] if len(sentiment_results) > 4 else "Unknown"
+
+            # --------------------------------------------------
             # Risk metrics
+            # --------------------------------------------------
             risk_metrics = self.calculate_risk_metrics(data)
-            
-            # Score
-            swing_score = self.calculate_swing_trading_score(data, sentiment_results, sector)
-            
+
+            # --------------------------------------------------
+            # Final score
+            # --------------------------------------------------
+            swing_score = self.calculate_swing_trading_score(
+                data=data,
+                sentiment_data=sentiment_results,
+                sector=sector
+            )
+
+            # --------------------------------------------------
             # Trading plan
+            # --------------------------------------------------
             trading_plan = self.generate_trading_plan(data, swing_score, risk_metrics)
-            
-            # Compile results
+
+            # --------------------------------------------------
+            # Result payload (TRUTHFUL + SAFE)
+            # --------------------------------------------------
             result = {
-                'symbol': final_symbol,
-                'company_name': company_name,
-                'sector': sector,
-                'current_price': float(current_price),
-                'price_change': float(price_change),
-                'price_change_pct': float(price_change_pct),
-                'rsi': float(rsi.iloc[-1]) if not rsi.empty and not pd.isna(rsi.iloc[-1]) else None,
-                'bollinger_bands': {
-                    'upper': float(bb_upper.iloc[-1]) if not bb_upper.empty else None,
-                    'middle': float(bb_middle.iloc[-1]) if not bb_middle.empty else None,
-                    'lower': float(bb_lower.iloc[-1]) if not bb_lower.empty else None
+                "symbol": final_symbol,
+                "company_name": company_name,
+                "sector": sector,
+                "current_price": float(current_price),
+                "price_change": float(price_change),
+                "price_change_pct": float(price_change_pct),
+
+                "rsi": float(rsi.iloc[-1]) if not rsi.empty and not pd.isna(rsi.iloc[-1]) else None,
+
+                "bollinger_bands": {
+                    "upper": float(bb_upper.iloc[-1]) if not bb_upper.empty else None,
+                    "middle": float(bb_middle.iloc[-1]) if not bb_middle.empty else None,
+                    "lower": float(bb_lower.iloc[-1]) if not bb_lower.empty else None
                 },
-                'stochastic': {
-                    'k': float(stoch_k.iloc[-1]) if not stoch_k.empty else None,
-                    'd': float(stoch_d.iloc[-1]) if not stoch_d.empty else None
+
+                "stochastic": {
+                    "k": float(stoch_k.iloc[-1]) if not stoch_k.empty else None,
+                    "d": float(stoch_d.iloc[-1]) if not stoch_d.empty else None
                 },
-                'macd': {
-                    'line': float(macd_line.iloc[-1]) if not macd_line.empty else None,
-                    'signal': float(signal_line.iloc[-1]) if not signal_line.empty else None,
-                    'histogram': float(histogram.iloc[-1]) if not histogram.empty else None
+
+                "macd": {
+                    "line": float(macd_line.iloc[-1]) if not macd_line.empty else None,
+                    "signal": float(signal_line.iloc[-1]) if not signal_line.empty else None,
+                    "histogram": float(histogram.iloc[-1]) if not histogram.empty else None
                 },
-                'support_resistance': {
-                    'support': float(support) if support else None,
-                    'resistance': float(resistance) if resistance else None
+
+                "support_resistance": {
+                    "support": float(support) if support else None,
+                    "resistance": float(resistance) if resistance else None
                 },
-                'sentiment': {
-                    'scores': sentiment_results[0],
-                    'method': sentiment_results[3],
-                    'source': sentiment_results[4],
-                    'summary': {
-                        'positive': sentiment_results[0].count('positive') if sentiment_results[0] else 0,
-                        'negative': sentiment_results[0].count('negative') if sentiment_results[0] else 0,
-                        'neutral': sentiment_results[0].count('neutral') if sentiment_results[0] else 0
+
+                "sentiment": {
+                    "scores": sentiments,
+                    "method": sentiment_method,
+                    "source": sentiment_source,
+                    "summary": {
+                        "positive": sentiments.count("positive") if sentiments else 0,
+                        "negative": sentiments.count("negative") if sentiments else 0,
+                        "neutral": sentiments.count("neutral") if sentiments else 0
                     }
                 },
-                'risk_metrics': risk_metrics,
-                'swing_score': float(swing_score),
-                'trading_plan': trading_plan,
-                'model_type': self.model_type,
-                'analysis_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+                "risk_metrics": risk_metrics,
+                "swing_score": float(swing_score),
+                "trading_plan": trading_plan,
+
+                # 🔥 CRITICAL FIX
+                "model_type": sentiment_method,
+
+                "analysis_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             }
-            
+
+            # --------------------------------------------------
             # Cache result
-            self._set_to_cache(cache_key, result, self.cache_ttl['analysis'])
-            
+            # --------------------------------------------------
+            self._set_to_cache(cache_key, result, self.cache_ttl["analysis"])
+
             return result
-            
+
         except Exception as e:
             logger.error(f"Error analyzing {symbol}: {e}")
             return None
+
 
     # ========================================================================
     # PORTFOLIO GENERATION
@@ -1600,4 +1667,5 @@ if __name__ == "__main__":
     print("\n" + "="*70)
     print("✅ System ready for production use!")
     print("="*70)
+
 
