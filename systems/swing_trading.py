@@ -999,36 +999,33 @@ class EnhancedSwingTradingSystem:
             return [f"Market analysis for {symbol}"]
     
     def _analyze_sentiment_via_api(self, articles: List[str]) -> Optional[Tuple]:
-        """Analyze sentiment via Hugging Face SBERT Space (FIXED)"""
         try:
             payload = {"inputs": articles}
-            api_response = query_hf_api(self.sentiment_api_url, payload)
+            response = query_hf_api(self.sentiment_api_url, payload)
 
-            if not api_response:
-                logger.error("HF API returned None")
+            if not isinstance(response, dict):
                 return None
 
-            if not api_response.get("success", False):
-                logger.error(f"HF API unsuccessful: {api_response}")
+            if response.get("success") is not True:
                 return None
 
-            results = api_response.get("results")
+            results = response.get("results")
             if not isinstance(results, list) or not results:
-                logger.error(f"HF API results invalid: {api_response}")
                 return None
 
             sentiments = []
             confidences = []
 
             for item in results:
+                if not isinstance(item, dict):
+                    continue  # 🔥 CRITICAL SAFETY
+
                 label = item.get("label")
                 confidence = item.get("confidence", 0.5)
 
-                if not label:
-                    continue
-
-                sentiments.append(label.lower())
-                confidences.append(float(confidence))
+                if isinstance(label, str):
+                    sentiments.append(label.lower())
+                    confidences.append(float(confidence))
 
             if not sentiments:
                 return None
@@ -1036,11 +1033,9 @@ class EnhancedSwingTradingSystem:
             return sentiments, confidences
 
         except Exception as e:
-            logger.error(f"HF sentiment API error: {e}")
+            logger.error(f"SBERT parse failure: {e}")
             return None
 
-
-    
     def analyze_sentiment_with_textblob(self, articles: List[str]) -> Tuple:
         """Fallback sentiment analysis with TextBlob"""
         sentiments = []
@@ -1667,5 +1662,6 @@ if __name__ == "__main__":
     print("\n" + "="*70)
     print("✅ System ready for production use!")
     print("="*70)
+
 
 
