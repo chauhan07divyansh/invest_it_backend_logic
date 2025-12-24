@@ -73,28 +73,29 @@ class EnhancedPositionTradingSystem:
     #  API CALLING HELPER METHODS
     # ==============================================================================
 
-    def _analyze_sentiment_via_api(self, articles: list) -> tuple[list, list] | None:
-        """Analyzes news sentiment by calling the remote SBERT Hugging Face API."""
+    def _analyze_sentiment_via_api(self, articles: list):
         try:
             payload = {"inputs": articles}
-            api_results = query_hf_api(self.sentiment_api_url, payload)
+            api_response = query_hf_api(self.sentiment_api_url, payload)
 
-            if api_results is None:
-                raise ValueError("API call to SBERT HF Space failed or returned no data.")
+            if not api_response or "results" not in api_response:
+                raise ValueError("Invalid SBERT API response")
 
-            # Handle potential nested list structure from HF API
-            if isinstance(api_results, list) and len(api_results) > 0 and isinstance(api_results[0], list):
-                api_results = api_results[0]
-                
-            # Safely extract labels and scores
-            sentiments = [res.get('label', 'neutral').lower() for res in api_results]
-            confidences = [res.get('score', 0.5) for res in api_results]
+            results = api_response["results"]
+
+            sentiments = []
+            confidences = []
+
+            for r in results:
+                sentiments.append(str(r.get("label", "neutral")).lower())
+                confidences.append(float(r.get("confidence", 0.5)))
+
             return sentiments, confidences
-            
-        except (ValueError, TypeError, IndexError, AttributeError) as e:
-            logging.error(
-                f"Could not parse SBERT API response. Error: {e}. Response: {api_results if 'api_results' in locals() else 'unknown'}")
+
+        except Exception as e:
+            logger.error(f"SBERT API parsing failed: {e}")
             return None
+
 
     def _analyze_mda_via_api(self, mda_texts: list) -> dict | None:
         """Analyzes MDA text by calling the remote MDA Hugging Face API."""
@@ -135,10 +136,13 @@ class EnhancedPositionTradingSystem:
                 management_tone = "Very Optimistic"
             elif mda_score >= 60:
                 management_tone = "Optimistic"
+            elif mda_score <= 30:
+                management_tone = "Very Pessimistic"
             elif mda_score <= 40:
                 management_tone = "Pessimistic"
-            elif mda_score <= 30: # Adding a 'Very Pessimistic' category
-                management_tone = "Very Pessimistic"
+            else:
+                management_tone = "Neutral"
+
 
 
             return {
@@ -248,83 +252,123 @@ class EnhancedPositionTradingSystem:
             return self.get_sample_mda_analysis(symbol) # Fallback on error
 
 
-    def calculate_position_trading_score(self, data, sentiment_data, fundamentals, trends, market_analysis, sector,
-                                         mda_analysis=None):
-        """Calculate comprehensive position trading score."""
+    def calculate_position_trading_score(
+        self,
+        data,
+        sentiment_data,
+        fundamentals,
+        trends,
+        market_analysis,
+        sector,
+        mda_analysis=None
+    ):
+        """
+        Calculate final Position Trading score (0–100)
+        Optimized for long-term holding (6–24 months)
+        """
+
         try:
-            # Get base weights
+            # ===============================
+            # 1️⃣ WEIGHTS (POSITION TRADING)
+            # ===============================
             weights = {
-                'fundamental': self.position_trading_params['fundamental_weight'],
-                'technical': self.position_trading_params['technical_weight'],
-                'sentiment': self.position_trading_params['sentiment_weight'],
-                'mda': self.position_trading_params['mda_weight']
+                "fundamental": self.position_trading_params["fundamental_weight"],
+                "technical": self.position_trading_params["technical_weight"],
+                "sentiment": self.position_trading_params["sentiment_weight"],
+                "mda": self.position_trading_params["mda_weight"],
             }
 
-            # 1. Calculate individual base scores
-            scores = {
-                'fundamental': self.calculate_fundamental_score(fundamentals, sector),
-                'technical': self.calculate_technical_score_position(data),
-                'sentiment': self.calculate_sentiment_score(sentiment_data),
-                'trend': trends.get('trend_score', 50),
-                'sector': market_analysis.get('sector_score', 60),
-                'mda': mda_analysis.get('mda_score', 50) if mda_analysis else 50
+            # ===============================
+            # 2️⃣ BASE SCORES
+            # ===============================
+            fundamental_score = self.calculate_fundamental_score(fundamentals, sector)
+            technical_score = self.calculate_technical_score_position(data)
+            sentiment_score = self.calculate_sentiment_score(sentiment_data)
+            mda_score = mda_analysis.get("mda_score", 50) if mda_analysis else 50
+
+            # ===============================
+            # 3️⃣ CONTEXTUAL SENTIMENT ADJUSTMENT
+            # ===============================
+            sector_sentiment_bias = {
+                "Information Technology": 1.15,
+                "Pharmaceuticals": 1.15,
+                "Healthcare": 1.10,
+                "Banking": 1.10,
+                "Financial Services": 1.10,
+                "Consumer Goods": 1.05,
+                "Power": 0.90,
+                "Oil & Gas": 0.95,
+                "Metals": 0.90,
+                "Default": 1.00
             }
 
-            # 2. Contextual Sentiment Multiplier
-            sector_sentiment_multipliers = {
-                'Information Technology': 1.2, 'Consumer Goods': 1.1, 'Financial Services': 1.1,
-                'Pharmaceuticals': 1.2, 'Power': 0.8, 'Oil & Gas': 1.0, 'Default': 1.0
-            }
-            sentiment_multiplier = sector_sentiment_multipliers.get(sector, sector_sentiment_multipliers['Default'])
-            contextual_sentiment_score = scores['sentiment'] * sentiment_multiplier
-            logger.info(f"Applying sentiment multiplier {sentiment_multiplier} for {sector}. Original: {scores['sentiment']:.1f}, Contextual: {contextual_sentiment_score:.1f}")
+            sentiment_multiplier = sector_sentiment_bias.get(sector, sector_sentiment_bias["Default"])
+            sentiment_score = min(100, sentiment_score * sentiment_multiplier)
 
-
-            # 3. Combine scores using weights
+            # ===============================
+            # 4️⃣ WEIGHTED BASE SCORE
+            # ===============================
             base_score = (
-                scores['fundamental'] * weights['fundamental'] +
-                scores['technical'] * weights['technical'] +
-                contextual_sentiment_score * weights['sentiment'] + # Use contextual score
-                scores['mda'] * weights['mda']
+                fundamental_score * weights["fundamental"]
+                + technical_score * weights["technical"]
+                + sentiment_score * weights["sentiment"]
+                + mda_score * weights["mda"]
             )
 
-            # 4. Apply modifiers
-            trend_modifier = scores['trend'] / 100
-            sector_modifier = scores['sector'] / 100
-            # Weighted average modifier: 70% base, 20% trend, 10% sector
-            final_score = base_score * (0.7 + 0.2 * trend_modifier + 0.1 * sector_modifier)
+            # ===============================
+            # 5️⃣ TREND & MARKET MODIFIERS
+            # ===============================
+            trend_score = trends.get("trend_score", 50) / 100
+            sector_score = market_analysis.get("sector_score", 60) / 100
 
-            # Volatility Penalty
-            if data is not None and not data.empty and 'Close' in data.columns:
-                 try:
-                    volatility = data['Close'].pct_change().std() * np.sqrt(252)
-                    if volatility > 0.6: final_score *= 0.6
-                    elif volatility > 0.4: final_score *= 0.8
-                 except Exception: pass # Ignore volatility calc errors
+            # Long-term bias: fundamentals + trend > everything
+            modifier = 0.75 + (0.15 * trend_score) + (0.10 * sector_score)
+            final_score = base_score * modifier
 
+            # ===============================
+            # 6️⃣ RISK & VOLATILITY PENALTY
+            # ===============================
+            if data is not None and not data.empty and "Close" in data.columns:
+                try:
+                    volatility = data["Close"].pct_change().std() * (252 ** 0.5)
+                    if volatility > 0.55:
+                        final_score *= 0.65
+                    elif volatility > 0.40:
+                        final_score *= 0.80
+                except Exception:
+                    pass
 
-            # Dividend Bonus
-            div_yield = fundamentals.get('dividend_yield', 0) or fundamentals.get('expected_div_yield', 0)
-            if isinstance(div_yield, (int, float)) and div_yield > 0.02:
-                final_score *= 1.1
-
-            # Momentum Bonus
-            if trends.get('momentum_1y', 0) > 0.15 and trends.get('momentum_6m', 0) > 0:
+            # ===============================
+            # 7️⃣ FUNDAMENTAL BONUS SIGNALS
+            # ===============================
+            dividend_yield = fundamentals.get("dividend_yield") or fundamentals.get("expected_div_yield", 0)
+            if isinstance(dividend_yield, (int, float)) and dividend_yield > 0.02:
                 final_score *= 1.05
 
-            # MDA Tone Bonus/Penalty
+            if trends.get("momentum_1y", 0) > 0.20 and trends.get("momentum_6m", 0) > 0:
+                final_score *= 1.04
+
+            # ===============================
+            # 8️⃣ MANAGEMENT TONE IMPACT (MDA)
+            # ===============================
             if mda_analysis:
-                management_tone = mda_analysis.get('management_tone', 'Neutral')
-                if management_tone == 'Very Optimistic': final_score *= 1.08
-                elif management_tone == 'Optimistic': final_score *= 1.04
-                elif management_tone == 'Pessimistic': final_score *= 0.92
-                elif management_tone == 'Very Pessimistic': final_score *= 0.85 # Added penalty
+                tone = mda_analysis.get("management_tone", "Neutral")
+                if tone == "Very Optimistic":
+                    final_score *= 1.08
+                elif tone == "Optimistic":
+                    final_score *= 1.04
+                elif tone == "Pessimistic":
+                    final_score *= 0.92
+                elif tone == "Very Pessimistic":
+                    final_score *= 0.85
 
-
-            return min(100, max(0, final_score)) # Clamp final score
+            # ===============================
+            # 9️⃣ FINAL CLAMP
+            # ===============================
+            return round(min(100, max(0, final_score)), 2)
 
         except Exception as e:
-            logger.error(f"Error calculating position trading score: {e}")
+            logger.error(f"Position score calculation failed: {e}")
             return 0
 
 
@@ -1293,9 +1337,10 @@ class EnhancedPositionTradingSystem:
                  return 50 # Neutral default
 
             sentiments, _, confidences, _, _ = sentiment_data
-            if not sentiments or not confidences or len(sentiments) != len(confidences):
-                 logger.warning("Mismatched sentiments/confidences or empty lists.")
-                 return 50
+            if not isinstance(sentiment_data, (list, tuple)) or len(sentiment_data) != 5:
+                logger.warning("Invalid sentiment_data structure")
+                return 50
+
 
             sentiment_value = 0
             total_weight = 0
@@ -1624,8 +1669,11 @@ class EnhancedPositionTradingSystem:
             return {"name": str(symbol), "sector": "Unknown", "market_cap": "Unknown", "div_yield": 0}
 
     def fetch_indian_news(self, symbol, num_articles=20):
-        """Fetch news for Indian companies using NewsAPI."""
-        # --- THIS METHOD REMAINS THE SAME (Consider moving to provider later) ---
+        """
+        Fetch news for Indian companies using NewsAPI.
+        Returns FULL article text when available (content > description > title).
+        Suitable for sentiment models trained on full articles.
+        """
         try:
             if not self.news_api_key:
                 logger.warning("NEWS_API_KEY not configured. Cannot fetch real news.")
@@ -1633,32 +1681,75 @@ class EnhancedPositionTradingSystem:
 
             base_symbol = str(symbol).split('.')[0].upper()
             stock_info = self.get_stock_info_from_db(base_symbol)
-            # Use company name for broader search, fallback to symbol
-            query_term = stock_info.get("name", base_symbol) if stock_info.get("name") != base_symbol else base_symbol
-            
-            # Construct URL - focus on Indian market
-            url = ("https://newsapi.org/v2/everything?"
-                   f"q={query_term}+India+stock+market&" # More specific query
-                   f"apiKey={self.news_api_key}&"
-                   f"pageSize={num_articles}&"
-                   "language=en&"
-                   "sortBy=relevancy") # Sort by relevance might be better than publishedAt
+
+            # Prefer company name for better recall
+            query_term = stock_info.get("name", base_symbol)
+            if not query_term or query_term == base_symbol:
+                query_term = base_symbol
+
+            url = (
+                "https://newsapi.org/v2/everything?"
+                f"q={query_term} AND India AND stock&"
+                f"apiKey={self.news_api_key}&"
+                f"pageSize={num_articles}&"
+                "language=en&"
+                "sortBy=relevancy"
+            )
 
             logger.info(f"Fetching news for '{query_term}' from NewsAPI")
-            response = requests.get(url, timeout=10) # 10 second timeout
+            response = requests.get(url, timeout=10)
 
-            if response.status_code == 200:
-                data = response.json()
-                articles = [a['title'] for a in data.get('articles', []) if a.get('title')]
-                logger.info(f"Retrieved {len(articles)} news articles for {query_term}")
-                return articles if articles else None
-            else:
-                logger.warning(f"NewsAPI error for {query_term}: Status {response.status_code}, Message: {response.text}")
+            if response.status_code != 200:
+                logger.warning(
+                    f"NewsAPI error for {query_term}: "
+                    f"Status {response.status_code}, Message: {response.text}"
+                )
                 return None
 
-        except requests.exceptions.Timeout: logger.warning(f"NewsAPI request timed out for {symbol}"); return None
-        except requests.exceptions.RequestException as e: logger.warning(f"NewsAPI request failed for {symbol}: {e}"); return None
-        except Exception as e: logger.error(f"Unexpected error fetching news for {symbol}: {e}"); return None
+            data = response.json()
+            raw_articles = data.get("articles", [])
+
+            articles = []
+            for a in raw_articles:
+                text = (
+                    a.get("content")
+                    or a.get("description")
+                    or a.get("title")
+                )
+
+                if not text or not isinstance(text, str):
+                    continue
+
+                text = text.replace("[+", "").strip()
+                articles.append(text)
+
+            # 🔒 Filter out headlines / short blurbs
+            articles = [a for a in articles if len(a.split()) >= 80]
+
+            if not articles:
+                logger.warning(f"No usable full articles found for {query_term}")
+                return None
+
+            # 🔍 Debug visibility (helps verify model input quality)
+            avg_len = sum(len(a) for a in articles) // len(articles)
+            logger.info(
+                f"News fetched for {query_term}: "
+                f"{len(articles)} articles | avg_chars={avg_len}"
+            )
+
+            return articles
+
+        except requests.exceptions.Timeout:
+            logger.warning(f"NewsAPI request timed out for {symbol}")
+            return None
+
+        except requests.exceptions.RequestException as e:
+            logger.warning(f"NewsAPI request failed for {symbol}: {e}")
+            return None
+
+        except Exception as e:
+            logger.error(f"Unexpected error fetching news for {symbol}: {e}")
+            return None
 
 
     # Portfolio generation methods (kept as is)
@@ -1863,3 +1954,4 @@ if __name__ == "__main__":
     logger = logging.getLogger(__name__)
     
     print("System Position Trading module loaded.")
+
