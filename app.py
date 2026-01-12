@@ -45,8 +45,17 @@ except ImportError as e:
 app = Flask(__name__)
 
 # --- Secure CORS Configuration ---
-FRONTEND_URL = "https://sentiquant-frontend.onrender.com"
-CORS(app, resources={r"/api/*": {"origins": FRONTEND_URL}})
+ALLOWED_ORIGINS = [
+    "https://sentiquant.org",
+    "https://www.sentiquant.org",
+    "https://sentiquant-frontend.onrender.com"
+]
+
+CORS(
+    app,
+    resources={r"/api/*": {"origins": ALLOWED_ORIGINS}},
+    supports_credentials=True
+)
 
 # --- Logging Configuration ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
