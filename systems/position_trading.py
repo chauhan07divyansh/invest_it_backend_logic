@@ -87,7 +87,10 @@ class EnhancedPositionTradingSystem:
             if not api_response or "results" not in api_response:
                 raise ValueError("Invalid SBERT API response")
 
-            results = api_response["results"]
+            results = api_response.get("results") or api_response
+            if not isinstance(results, list):
+                raise ValueError("Unexpected SBERT API response format")
+
 
             sentiments = []
             confidences = []
@@ -171,7 +174,7 @@ class EnhancedPositionTradingSystem:
         try:
             # Attempt to fetch real news first
             articles = self.fetch_indian_news(symbol, num_articles)
-            news_source = "Real news (NewsAPI)"
+            news_source = "Event Registry (newsapi.ai)"
 
             # If no real news, use sample news
             if not articles:
@@ -1337,38 +1340,45 @@ class EnhancedPositionTradingSystem:
 
     def calculate_sentiment_score(self, sentiment_data):
         """Calculate sentiment score from news analysis results."""
-         # --- THIS METHOD REMAINS THE SAME ---
         try:
-            if not sentiment_data or len(sentiment_data) < 4 or not sentiment_data[0]: # Check if sentiments list exists and is not empty
-                 return 50 # Neutral default
+            if not sentiment_data or len(sentiment_data) != 5 or not sentiment_data[0]:
+                return 50  # Neutral default
 
             sentiments, _, confidences, _, _ = sentiment_data
-            if not isinstance(sentiment_data, (list, tuple)) or len(sentiment_data) != 5:
-                logger.warning("Invalid sentiment_data structure")
-                return 50
 
+            if len(sentiments) != len(confidences):
+                logger.warning("Sentiment/confidence length mismatch")
 
-            sentiment_value = 0
-            total_weight = 0
+            sentiment_value = 0.0
+            total_weight = 0.0
+
             for sentiment, confidence in zip(sentiments, confidences):
-                 # Use confidence as weight, default to 0.5 if invalid
-                 weight = float(confidence) if isinstance(confidence, (int, float)) and not pd.isna(confidence) else 0.5
-                 
-                 sentiment_str = str(sentiment).lower()
-                 if 'positive' in sentiment_str: sentiment_value += weight
-                 elif 'negative' in sentiment_str: sentiment_value -= weight
-                 # Neutral adds 0
-                 total_weight += weight
+                weight = (
+                    float(confidence)
+                    if isinstance(confidence, (int, float)) and not pd.isna(confidence)
+                    else 0.5
+                )
+
+                sentiment_str = str(sentiment).lower()
+                if 'positive' in sentiment_str:
+                    sentiment_value += weight
+                elif 'negative' in sentiment_str:
+                    sentiment_value -= weight
+
+                total_weight += weight
 
             if total_weight > 0:
-                 normalized_sentiment = sentiment_value / total_weight
-                 sentiment_score = 50 + (normalized_sentiment * 50) # Scale -1 to 1 -> 0 to 100
-            else: sentiment_score = 50 # If no valid weights, return neutral
+                normalized_sentiment = sentiment_value / total_weight
+                sentiment_score = 50 + (normalized_sentiment * 50)
+            else:
+                sentiment_score = 50
 
-            return min(100, max(0, sentiment_score)) # Clamp score
+            return min(100, max(0, sentiment_score))
+
         except Exception as e:
             logger.error(f"Error calculating sentiment score: {e}")
             return 50
+
 
 
     def generate_position_trading_plan(self, data, score, risk_metrics, fundamentals, trends):
@@ -1951,5 +1961,6 @@ if __name__ == "__main__":
     logger = logging.getLogger(__name__)
     
     print("System Position Trading module loaded.")
+
 
 
