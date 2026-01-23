@@ -947,54 +947,72 @@ class EnhancedSwingTradingSystem:
     # ========================================================================
     
     def fetch_indian_news(self, symbol: str, num_articles: int = 15) -> Optional[List[str]]:
-        """Fetch news for Indian companies"""
+    """
+    Fetch FULL news articles using newsapi.ai (Event Registry)
+    """
         try:
-            if not self.news_api_key:
+            if not config.EVENT_REGISTRY_API_KEY:
                 return None
-            
-            # Check cache
-            cache_key = self._get_cache_key("news", symbol, num=num_articles)
-            cached_news = self._get_from_cache(cache_key)
-            if cached_news:
-                return cached_news.get('articles')
-            
-            base_symbol = str(symbol).split('.')[0].upper()
+
+        # Cache check
+            cache_key = self._get_cache_key("news", symbol, limit=num_articles)
+            cached = self._get_from_cache(cache_key)
+            if cached:
+                return cached.get("articles")
+
+            base_symbol = symbol.split(".")[0]
             stock_info = self.get_stock_info_from_db(base_symbol)
             company_name = stock_info.get("name", base_symbol)
-            
-            url = f"https://newsapi.org/v2/everything?q={company_name}+India+stock&apiKey={self.news_api_key}&pageSize={num_articles}&language=en&sortBy=publishedAt"
-            
-            response = requests.get(url, timeout=10)
-            if response.status_code == 200:
-                data = response.json()
-                articles = []
 
-                for a in data.get("articles", []):
-                    title = a.get("title")
-                    desc = a.get("description")
+            payload = {
+                "action": "getArticles",
+                "keyword": company_name,
+                "keywordOper": "and",
+                "lang": ["eng"],
+                "articlesPage": 1,
+                "articlesCount": num_articles,
+                "articlesSortBy": "date",
+                "articlesSortByAsc": False,
+                "dataType": ["news"],
+                "includeArticleBody": True,
+                "apiKey": config.EVENT_REGISTRY_API_KEY
+            }
 
-                    if title:
-                        full_text = title
+            response = requests.post(
+                config.EVENT_REGISTRY_ENDPOINT,
+                json=payload,
+                timeout=15
+            )
 
-                        if desc:
-                            full_text += f". {desc}"
+            if response.status_code != 200:
+                logger.warning(f"Event Registry HTTP {response.status_code}")
+                return None
 
-                        full_text += ". This news discusses potential financial and market impact."
+            data = response.json()
+            articles = []
 
-                        articles.append(full_text)
+            for item in data.get("articles", {}).get("results", []):
+                body = item.get("body")
+                title = item.get("title")
 
+                if body and len(body) > 200:
+                    articles.append(body)
+                elif title:
+                    articles.append(title)
 
-                
-                if articles:
-                    # Cache news
-                    self._set_to_cache(cache_key, {'articles': articles}, self.cache_ttl['news'])
-                    return articles
-            
-            return None
-            
+            if articles:
+                self._set_to_cache(
+                    cache_key,
+                    {"articles": articles},
+                    self.cache_ttl["news"]
+                )
+
+            return articles if articles else None
+
         except Exception as e:
-            logger.warning(f"Error fetching news for {symbol}: {e}")
+            logger.error(f"Event Registry fetch failed for {symbol}: {e}")
             return None
+
     
     def get_sample_news(self, symbol: str) -> List[str]:
         """Generate sample news"""
@@ -1678,6 +1696,7 @@ if __name__ == "__main__":
     print("\n" + "="*70)
     print("✅ System ready for production use!")
     print("="*70)
+
 
 
 
