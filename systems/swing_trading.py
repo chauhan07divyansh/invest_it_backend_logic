@@ -947,9 +947,9 @@ class EnhancedSwingTradingSystem:
     # ========================================================================
     
     def fetch_indian_news(self, symbol: str, num_articles: int = 15) -> Optional[List[str]]:
-    """
-    Fetch FULL news articles using newsapi.ai (Event Registry)
-    """
+        """
+        Fetch FULL news articles using newsapi.ai (Event Registry)
+        """
         try:
             if not config.EVENT_REGISTRY_API_KEY:
                 return None
@@ -1696,6 +1696,7 @@ if __name__ == "__main__":
     print("\n" + "="*70)
     print("✅ System ready for production use!")
     print("="*70)
+
 
 
 
