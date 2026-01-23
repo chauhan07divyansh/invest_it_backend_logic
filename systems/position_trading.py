@@ -23,7 +23,13 @@ logger = logging.getLogger(__name__)
 class EnhancedPositionTradingSystem:
     def __init__(self, data_provider=None, mda_processor=None, redis_client=None):
         try:
-            self.news_api_key = config.NEWS_API_KEY
+            self.event_registry_api_key = getattr(config, "EVENT_REGISTRY_API_KEY", None)
+            self.event_registry_endpoint = getattr(
+            config,
+            "EVENT_REGISTRY_ENDPOINT",
+            "https://eventregistry.org/api/v1/article/getArticles"
+        )
+
             self.position_trading_params = config.POSITION_TRADING_PARAMS
             self._validate_trading_params()
             
@@ -1670,86 +1676,77 @@ class EnhancedPositionTradingSystem:
 
     def fetch_indian_news(self, symbol, num_articles=20):
         """
-        Fetch news for Indian companies using NewsAPI.
-        Returns FULL article text when available (content > description > title).
-        Suitable for sentiment models trained on full articles.
+        Fetch FULL news articles using newsapi.ai (Event Registry).
+        Returns full article body (best for SBERT).
         """
         try:
-            if not self.news_api_key:
-                logger.warning("NEWS_API_KEY not configured. Cannot fetch real news.")
+            if not self.event_registry_api_key:
+                logger.warning("EVENT_REGISTRY_API_KEY not configured.")
                 return None
 
             base_symbol = str(symbol).split('.')[0].upper()
             stock_info = self.get_stock_info_from_db(base_symbol)
+            company_name = stock_info.get("name", base_symbol)
 
-            # Prefer company name for better recall
-            query_term = stock_info.get("name", base_symbol)
-            if not query_term or query_term == base_symbol:
-                query_term = base_symbol
+            payload = {
+                "action": "getArticles",
+                "keyword": company_name,
+                "keywordOper": "and",
+                "lang": ["eng"],
+                "articlesPage": 1,
+                "articlesCount": num_articles,
+                "articlesSortBy": "date",
+                "articlesSortByAsc": False,
+                "dataType": ["news"],
+                "includeArticleBody": True,
+                "apiKey": self.event_registry_api_key
+            }
 
-            url = (
-                "https://newsapi.org/v2/everything?"
-                f"q={query_term} AND India AND stock&"
-                f"apiKey={self.news_api_key}&"
-                f"pageSize={num_articles}&"
-                "language=en&"
-                "sortBy=relevancy"
+            response = requests.post(
+                self.event_registry_endpoint,
+                json=payload,
+                timeout=15
             )
-
-            logger.info(f"Fetching news for '{query_term}' from NewsAPI")
-            response = requests.get(url, timeout=10)
 
             if response.status_code != 200:
                 logger.warning(
-                    f"NewsAPI error for {query_term}: "
-                    f"Status {response.status_code}, Message: {response.text}"
+                    f"Event Registry error {response.status_code}: {response.text}"
                 )
                 return None
 
             data = response.json()
-            raw_articles = data.get("articles", [])
+            results = data.get("articles", {}).get("results", [])
 
             articles = []
-            for a in raw_articles:
-                text = (
-                    a.get("content")
-                    or a.get("description")
-                    or a.get("title")
-                )
+            for item in results:
+                body = item.get("body")
+                title = item.get("title")
 
-                if not text or not isinstance(text, str):
-                    continue
-
-                text = text.replace("[+", "").strip()
-                articles.append(text)
-
-            # 🔒 Filter out headlines / short blurbs
-            articles = [a for a in articles if len(a.split()) >= 80]
+                if body and len(body.split()) >= 120:
+                    articles.append(body)
+                elif title:
+                    articles.append(title)
 
             if not articles:
-                logger.warning(f"No usable full articles found for {query_term}")
+                logger.warning(f"No usable articles found for {company_name}")
                 return None
 
-            # 🔍 Debug visibility (helps verify model input quality)
             avg_len = sum(len(a) for a in articles) // len(articles)
             logger.info(
-                f"News fetched for {query_term}: "
+                f"Event Registry news fetched for {company_name}: "
                 f"{len(articles)} articles | avg_chars={avg_len}"
             )
 
             return articles
 
         except requests.exceptions.Timeout:
-            logger.warning(f"NewsAPI request timed out for {symbol}")
-            return None
-
-        except requests.exceptions.RequestException as e:
-            logger.warning(f"NewsAPI request failed for {symbol}: {e}")
+            logger.warning(f"Event Registry request timed out for {symbol}")
             return None
 
         except Exception as e:
-            logger.error(f"Unexpected error fetching news for {symbol}: {e}")
+            logger.error(f"Event Registry fetch failed for {symbol}: {e}")
             return None
+
 
 
     # Portfolio generation methods (kept as is)
@@ -1954,4 +1951,5 @@ if __name__ == "__main__":
     logger = logging.getLogger(__name__)
     
     print("System Position Trading module loaded.")
+
 
