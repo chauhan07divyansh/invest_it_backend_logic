@@ -11,7 +11,8 @@ load_dotenv()
 # These MUST be set as environment variables in your Render dashboard.
 # DO NOT hardcode secret keys in your code.
 
-NEWS_API_KEY = os.getenv("NEWS_API_KEY")
+EVENT_REGISTRY_API_KEY = "5ed23f95-65bb-4654-8d4a-6da8ffb3996d"
+EVENT_REGISTRY_ENDPOINT = "https://eventregistry.org/api/v1/article/getArticles"
 HF_API_KEY = os.getenv("HF_API_KEY")  # Your Hugging Face User Access Token (read or write)
 
 
@@ -54,6 +55,7 @@ SWING_TRADING_PARAMS = {
 
 # IMPORTANT: All model download logic has been removed. This file now only
 # declares configuration variables to be read from the environment.
+
 
 
 
