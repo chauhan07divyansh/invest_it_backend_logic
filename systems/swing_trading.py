@@ -43,7 +43,12 @@ class EnhancedSwingTradingSystem:
     
     def __init__(self, data_provider=None, redis_client=None):
         try:
-            self.news_api_key = config.NEWS_API_KEY
+            self.event_registry_api_key = getattr(config, "EVENT_REGISTRY_API_KEY", None)
+            self.event_registry_endpoint = getattr(config, "EVENT_REGISTRY_ENDPOINT", None)
+
+            if not self.event_registry_api_key:
+                logger.warning("⚠️ EVENT_REGISTRY_API_KEY not configured. News sentiment disabled.")
+
             self.swing_trading_params = config.SWING_TRADING_PARAMS
             self._validate_trading_params()
             
@@ -1696,6 +1701,7 @@ if __name__ == "__main__":
     print("\n" + "="*70)
     print("✅ System ready for production use!")
     print("="*70)
+
 
 
 
