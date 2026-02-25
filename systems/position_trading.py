@@ -620,7 +620,7 @@ class EnhancedPositionTradingSystem(StockDBMixin):
             logger.error(f"Error in parallel analysis: {e}")
             return []
 
-            }
+            
 
             # Merge all stocks
             self.indian_stocks = {}
@@ -1617,3 +1617,4 @@ if __name__ == "__main__":
     )
     logger = logging.getLogger(__name__)
     print("EnhancedPositionTradingSystem module loaded.")
+
