@@ -1,0 +1,129 @@
+{"level":"info","message":"New PostgreSQL client connected","service":"fintech-auth","timestamp":"2026-03-19 00:44:47"}
+{"level":"info","message":"🚀 Server running on port 5000 [development]","service":"fintech-auth","timestamp":"2026-03-19 00:59:17"}
+{"level":"info","message":"Redis client connected","service":"fintech-auth","timestamp":"2026-03-19 00:59:17"}
+{"level":"info","message":"Redis client ready","service":"fintech-auth","timestamp":"2026-03-19 00:59:17"}
+{"level":"info","message":"🚀 Server running on port 5000 [development]","service":"fintech-auth","timestamp":"2026-03-19 00:59:23"}
+{"level":"info","message":"Redis client connected","service":"fintech-auth","timestamp":"2026-03-19 00:59:23"}
+{"level":"info","message":"Redis client ready","service":"fintech-auth","timestamp":"2026-03-19 00:59:23"}
+{"level":"info","message":"🚀 Server running on port 5000 [development]","service":"fintech-auth","timestamp":"2026-03-19 00:59:40"}
+{"level":"info","message":"Redis client connected","service":"fintech-auth","timestamp":"2026-03-19 00:59:40"}
+{"level":"info","message":"Redis client ready","service":"fintech-auth","timestamp":"2026-03-19 00:59:40"}
+{"level":"info","message":"🚀 Server running on port 5000 [development]","service":"fintech-auth","timestamp":"2026-03-19 00:59:52"}
+{"level":"info","message":"Redis client connected","service":"fintech-auth","timestamp":"2026-03-19 00:59:52"}
+{"level":"info","message":"Redis client ready","service":"fintech-auth","timestamp":"2026-03-19 00:59:52"}
+{"level":"info","message":"🚀 Server running on port 5000 [development]","service":"fintech-auth","timestamp":"2026-03-19 01:00:11"}
+{"level":"info","message":"Redis client connected","service":"fintech-auth","timestamp":"2026-03-19 01:00:11"}
+{"level":"info","message":"Redis client ready","service":"fintech-auth","timestamp":"2026-03-19 01:00:11"}
+{"level":"info","message":"🚀 Server running on port 5000 [development]","service":"fintech-auth","timestamp":"2026-03-19 01:11:04"}
+{"level":"info","message":"Redis client connected","service":"fintech-auth","timestamp":"2026-03-19 01:11:04"}
+{"level":"info","message":"Redis client ready","service":"fintech-auth","timestamp":"2026-03-19 01:11:04"}
+{"level":"info","message":"🚀 Server running on port 5000 [development]","service":"fintech-auth","timestamp":"2026-03-19 01:11:06"}
+{"level":"info","message":"Redis client connected","service":"fintech-auth","timestamp":"2026-03-19 01:11:07"}
+{"level":"info","message":"Redis client ready","service":"fintech-auth","timestamp":"2026-03-19 01:11:07"}
+{"level":"info","message":"🚀 Server running on port 5000 [development]","service":"fintech-auth","timestamp":"2026-03-19 01:11:08"}
+{"level":"info","message":"Redis client connected","service":"fintech-auth","timestamp":"2026-03-19 01:11:08"}
+{"level":"info","message":"Redis client ready","service":"fintech-auth","timestamp":"2026-03-19 01:11:08"}
+{"level":"info","message":"🚀 Server running on port 5000 [development]","service":"fintech-auth","timestamp":"2026-03-19 01:11:23"}
+{"level":"info","message":"Redis client connected","service":"fintech-auth","timestamp":"2026-03-19 01:11:23"}
+{"level":"info","message":"Redis client ready","service":"fintech-auth","timestamp":"2026-03-19 01:11:23"}
+{"level":"info","message":"New PostgreSQL client connected","service":"fintech-auth","timestamp":"2026-03-19 01:12:14"}
+{"email":"bhattpawan1301@gmail.com","level":"info","message":"User registered","service":"fintech-auth","timestamp":"2026-03-19 01:12:14","userId":"d14e26de-56a6-4af7-b341-25e7fb11589b"}
+{"error":"Message failed: 553 Sender is not allowed to relay emails","level":"error","message":"Failed to send welcome email","service":"fintech-auth","timestamp":"2026-03-19 01:12:16","userEmail":"bhattpawan1301@gmail.com"}
+{"level":"info","message":"🚀 Server running on port 5000 [development]","service":"fintech-auth","timestamp":"2026-03-19 01:28:51"}
+{"level":"info","message":"Redis client connected","service":"fintech-auth","timestamp":"2026-03-19 01:28:51"}
+{"level":"info","message":"Redis client ready","service":"fintech-auth","timestamp":"2026-03-19 01:28:51"}
+{"level":"info","message":"New PostgreSQL client connected","service":"fintech-auth","timestamp":"2026-03-19 01:29:41"}
+{"email":"bhattpawan1301@gmail.com","ip":"::1","level":"info","message":"Successful login","service":"fintech-auth","timestamp":"2026-03-19 01:29:51","userId":"d14e26de-56a6-4af7-b341-25e7fb11589b"}
+{"error":"Message failed: 553 Sender is not allowed to relay emails","level":"error","message":"Failed to send login alert email","service":"fintech-auth","timestamp":"2026-03-19 01:29:52","userEmail":"bhattpawan1301@gmail.com"}
+{"level":"info","message":"🚀 Server running on port 5000 [development]","service":"fintech-auth","timestamp":"2026-03-19 01:35:47"}
+{"level":"info","message":"Redis client connected","service":"fintech-auth","timestamp":"2026-03-19 01:35:47"}
+{"level":"info","message":"Redis client ready","service":"fintech-auth","timestamp":"2026-03-19 01:35:47"}
+{"level":"info","message":"🚀 Server running on port 5000 [development]","service":"fintech-auth","timestamp":"2026-03-19 01:36:07"}
+{"level":"info","message":"Redis client connected","service":"fintech-auth","timestamp":"2026-03-19 01:36:07"}
+{"level":"info","message":"Redis client ready","service":"fintech-auth","timestamp":"2026-03-19 01:36:07"}
+{"level":"info","message":"🚀 Server running on port 5000 [development]","service":"fintech-auth","timestamp":"2026-03-19 01:36:18"}
+{"level":"info","message":"Redis client connected","service":"fintech-auth","timestamp":"2026-03-19 01:36:18"}
+{"level":"info","message":"Redis client ready","service":"fintech-auth","timestamp":"2026-03-19 01:36:18"}
+{"level":"info","message":"🚀 Server running on port 5000 [development]","service":"fintech-auth","timestamp":"2026-03-19 01:38:19"}
+{"level":"info","message":"Redis client connected","service":"fintech-auth","timestamp":"2026-03-19 01:38:19"}
+{"level":"info","message":"Redis client ready","service":"fintech-auth","timestamp":"2026-03-19 01:38:19"}
+{"level":"info","message":"New PostgreSQL client connected","service":"fintech-auth","timestamp":"2026-03-19 01:38:55"}
+{"email":"onlyforprofessionn@gmail.com","level":"info","message":"User registered","service":"fintech-auth","timestamp":"2026-03-19 01:38:56","userId":"af25c8ad-be7e-48a9-a9fc-6e1d0ced0df5"}
+{"level":"info","message":"Welcome email sent","service":"fintech-auth","timestamp":"2026-03-19 01:38:58","userEmail":"onlyforprofessionn@gmail.com"}
+{"error":"jwt expired","ip":"::1","level":"warn","message":"Authentication failed","service":"fintech-auth","timestamp":"2026-03-19 01:47:40"}
+{"level":"info","message":"New PostgreSQL client connected","service":"fintech-auth","timestamp":"2026-03-19 01:48:11"}
+{"email":"chaudharyayush2004@gmail.com","level":"info","message":"User registered","service":"fintech-auth","timestamp":"2026-03-19 01:48:12","userId":"bbf74c3a-2e8e-405c-ad38-1ee5eccc41ab"}
+{"level":"info","message":"Welcome email sent","service":"fintech-auth","timestamp":"2026-03-19 01:48:13","userEmail":"chaudharyayush2004@gmail.com"}
+{"level":"info","message":"New PostgreSQL client connected","service":"fintech-auth","timestamp":"2026-03-19 01:49:11"}
+{"email":"chaudharyayush2004@gmail.com","ip":"::1","level":"info","message":"Successful login","service":"fintech-auth","timestamp":"2026-03-19 01:49:12","userId":"bbf74c3a-2e8e-405c-ad38-1ee5eccc41ab"}
+{"level":"info","message":"Login alert email sent","messageId":"<66aff9bb-36ea-fa57-6bcc-e2e16724c83a@sentiquant.org>","service":"fintech-auth","timestamp":"2026-03-19 01:49:12","userEmail":"chaudharyayush2004@gmail.com"}
+{"level":"info","message":"User logged out","service":"fintech-auth","timestamp":"2026-03-19 01:49:22","userId":"bbf74c3a-2e8e-405c-ad38-1ee5eccc41ab"}
+{"level":"info","message":"New PostgreSQL client connected","service":"fintech-auth","timestamp":"2026-03-19 01:52:19"}
+{"email":"shreyanshchauhan24@gmail.com","level":"info","message":"User registered","service":"fintech-auth","timestamp":"2026-03-19 01:52:19","userId":"64e9de0a-4367-4742-948e-f2d9ab4b0f7e"}
+{"level":"info","message":"Welcome email sent","service":"fintech-auth","timestamp":"2026-03-19 01:52:24","userEmail":"shreyanshchauhan24@gmail.com"}
+{"email":"shreyanshchauhan24@gmail.com","ip":"::1","level":"info","message":"Successful login","service":"fintech-auth","timestamp":"2026-03-19 01:52:35","userId":"64e9de0a-4367-4742-948e-f2d9ab4b0f7e"}
+{"level":"info","message":"Login alert email sent","messageId":"<9fc99707-17af-d2f5-a0db-c6591ff045ec@sentiquant.org>","service":"fintech-auth","timestamp":"2026-03-19 01:52:36","userEmail":"shreyanshchauhan24@gmail.com"}
+{"level":"info","message":"New PostgreSQL client connected","service":"fintech-auth","timestamp":"2026-03-19 14:02:29"}
+{"level":"info","message":"🚀 Server running on port 5000 [development]","service":"fintech-auth","timestamp":"2026-03-19 14:02:38"}
+{"level":"info","message":"Redis client connected","service":"fintech-auth","timestamp":"2026-03-19 14:02:38"}
+{"level":"info","message":"Redis client ready","service":"fintech-auth","timestamp":"2026-03-19 14:02:38"}
+{"level":"info","message":"New PostgreSQL client connected","service":"fintech-auth","timestamp":"2026-03-19 14:04:00"}
+{"email":"yashikash28@gmail.com","level":"info","message":"User registered","service":"fintech-auth","timestamp":"2026-03-19 14:04:01","userId":"f9fe9b74-6347-4c2f-a57b-be12b7908d1b"}
+{"level":"info","message":"Welcome email sent","service":"fintech-auth","timestamp":"2026-03-19 14:04:03","userEmail":"yashikash28@gmail.com"}
+{"level":"info","message":"New PostgreSQL client connected","service":"fintech-auth","timestamp":"2026-03-19 14:04:38"}
+{"attempts":1,"ip":"::1","level":"warn","message":"Failed login attempt","service":"fintech-auth","timestamp":"2026-03-19 14:04:39","userId":"f9fe9b74-6347-4c2f-a57b-be12b7908d1b"}
+{"level":"info","message":"New PostgreSQL client connected","service":"fintech-auth","timestamp":"2026-03-19 14:07:14"}
+{"attempts":2,"ip":"::1","level":"warn","message":"Failed login attempt","service":"fintech-auth","timestamp":"2026-03-19 14:07:15","userId":"f9fe9b74-6347-4c2f-a57b-be12b7908d1b"}
+{"level":"info","message":"New PostgreSQL client connected","service":"fintech-auth","timestamp":"2026-03-19 14:07:47"}
+{"email":"yashikash28@gmail.com","ip":"::1","level":"info","message":"Successful login","service":"fintech-auth","timestamp":"2026-03-19 14:07:48","userId":"f9fe9b74-6347-4c2f-a57b-be12b7908d1b"}
+{"level":"info","message":"Login alert email sent","messageId":"<bd59e884-080f-16c3-b856-2efe216c5b40@sentiquant.org>","service":"fintech-auth","timestamp":"2026-03-19 14:07:49","userEmail":"yashikash28@gmail.com"}
+{"level":"info","message":"New PostgreSQL client connected","service":"fintech-auth","timestamp":"2026-03-22 17:53:51"}
+{"level":"info","message":"🚀 Server running on port 5000 [development]","service":"fintech-auth","timestamp":"2026-03-22 17:54:04"}
+{"level":"info","message":"Redis client connected","service":"fintech-auth","timestamp":"2026-03-22 17:54:04"}
+{"level":"info","message":"Redis client ready","service":"fintech-auth","timestamp":"2026-03-22 17:54:04"}
+{"level":"info","message":"🚀 Server running on port 5000 [development]","service":"fintech-auth","timestamp":"2026-03-22 20:26:44"}
+{"level":"info","message":"Redis client connected","service":"fintech-auth","timestamp":"2026-03-22 20:26:44"}
+{"level":"info","message":"Redis client ready","service":"fintech-auth","timestamp":"2026-03-22 20:26:44"}
+{"level":"info","message":"🚀 Server running on port 5000 [development]","service":"fintech-auth","timestamp":"2026-04-07 15:14:17"}
+{"level":"info","message":"Redis client connected","service":"fintech-auth","timestamp":"2026-04-07 15:14:17"}
+{"level":"info","message":"Redis client ready","service":"fintech-auth","timestamp":"2026-04-07 15:14:17"}
+{"level":"info","message":"New PostgreSQL client connected","service":"fintech-auth","timestamp":"2026-04-07 15:15:57"}
+{"email":"yashikash28@gmail.com","ip":"::1","level":"info","message":"Successful login","service":"fintech-auth","timestamp":"2026-04-07 15:15:59","userId":"f9fe9b74-6347-4c2f-a57b-be12b7908d1b"}
+{"level":"info","message":"Login alert email sent","messageId":"<c01ccdab-3f85-3222-c15f-7f080d9a9045@sentiquant.org>","service":"fintech-auth","timestamp":"2026-04-07 15:16:12","userEmail":"yashikash28@gmail.com"}
+{"level":"info","message":"🚀 Server running on port 5000 [development]","service":"fintech-auth","timestamp":"2026-04-07 17:22:49"}
+{"level":"info","message":"Redis client connected","service":"fintech-auth","timestamp":"2026-04-07 17:22:49"}
+{"level":"info","message":"Redis client ready","service":"fintech-auth","timestamp":"2026-04-07 17:22:49"}
+{"level":"info","message":"🚀 Server running on port 5000 [development]","service":"fintech-auth","timestamp":"2026-04-07 17:24:50"}
+{"level":"info","message":"Redis client connected","service":"fintech-auth","timestamp":"2026-04-07 17:24:50"}
+{"level":"info","message":"Redis client ready","service":"fintech-auth","timestamp":"2026-04-07 17:24:50"}
+{"level":"info","message":"🚀 Server running on port 5000 [development]","service":"fintech-auth","timestamp":"2026-04-07 17:25:16"}
+{"level":"info","message":"Redis client connected","service":"fintech-auth","timestamp":"2026-04-07 17:25:16"}
+{"level":"info","message":"Redis client ready","service":"fintech-auth","timestamp":"2026-04-07 17:25:16"}
+{"level":"info","message":"🚀 Server running on port 5001 [development]","service":"fintech-auth","timestamp":"2026-04-07 17:27:42"}
+{"level":"info","message":"Redis client connected","service":"fintech-auth","timestamp":"2026-04-07 17:27:42"}
+{"level":"info","message":"Redis client ready","service":"fintech-auth","timestamp":"2026-04-07 17:27:42"}
+{"level":"info","message":"New PostgreSQL client connected","service":"fintech-auth","timestamp":"2026-04-07 17:36:35"}
+{"level":"info","message":"New PostgreSQL client connected","service":"fintech-auth","timestamp":"2026-04-07 17:38:31"}
+{"email":"test@example.com","level":"info","message":"User registered","service":"fintech-auth","timestamp":"2026-04-07 17:38:31","userId":"d7a605c2-c8cb-40e2-8b02-50f44511e27e"}
+{"level":"info","message":"Welcome email sent","service":"fintech-auth","timestamp":"2026-04-07 17:38:43","userEmail":"test@example.com"}
+{"level":"info","message":"New PostgreSQL client connected","service":"fintech-auth","timestamp":"2026-04-07 17:40:25"}
+{"email":"test@example.com","ip":"::1","level":"info","message":"Successful login","service":"fintech-auth","timestamp":"2026-04-07 17:40:26","userId":"d7a605c2-c8cb-40e2-8b02-50f44511e27e"}
+{"level":"info","message":"Login alert email sent","messageId":"<7f75f93e-f09e-8d7b-5a8d-c8c1de1b4438@sentiquant.org>","service":"fintech-auth","timestamp":"2026-04-07 17:40:26","userEmail":"test@example.com"}
+{"level":"info","message":"🚀 Server running on port 5001 [development]","service":"fintech-auth","timestamp":"2026-04-07 22:12:19"}
+{"level":"info","message":"Redis client connected","service":"fintech-auth","timestamp":"2026-04-07 22:12:19"}
+{"level":"info","message":"Redis client ready","service":"fintech-auth","timestamp":"2026-04-07 22:12:19"}
+{"level":"info","message":"New PostgreSQL client connected","service":"fintech-auth","timestamp":"2026-04-07 22:12:36"}
+{"email":"test@example.com","ip":"::1","level":"info","message":"Successful login","service":"fintech-auth","timestamp":"2026-04-07 22:12:37","userId":"d7a605c2-c8cb-40e2-8b02-50f44511e27e"}
+{"level":"info","message":"Login alert email sent","messageId":"<2693981a-307b-d6a3-1ab7-f71944c62e9f@sentiquant.org>","service":"fintech-auth","timestamp":"2026-04-07 22:12:48","userEmail":"test@example.com"}
+{"level":"info","message":"New PostgreSQL client connected","service":"fintech-auth","timestamp":"2026-04-07 22:30:53"}
+{"email":"test@example.com","ip":"::1","level":"info","message":"Successful login","service":"fintech-auth","timestamp":"2026-04-07 22:30:53","userId":"d7a605c2-c8cb-40e2-8b02-50f44511e27e"}
+{"level":"info","message":"Login alert email sent","messageId":"<56726a59-f36c-399a-4735-5fdc80b398ac@sentiquant.org>","service":"fintech-auth","timestamp":"2026-04-07 22:31:04","userEmail":"test@example.com"}
+{"level":"info","message":"New PostgreSQL client connected","service":"fintech-auth","timestamp":"2026-04-07 23:04:39"}
+{"email":"test@example.com","ip":"::1","level":"info","message":"Successful login","service":"fintech-auth","timestamp":"2026-04-07 23:04:40","userId":"d7a605c2-c8cb-40e2-8b02-50f44511e27e"}
+{"level":"info","message":"Login alert email sent","messageId":"<a9a8b183-b1b7-2145-45d1-79f206f3473a@sentiquant.org>","service":"fintech-auth","timestamp":"2026-04-07 23:04:51","userEmail":"test@example.com"}
+{"level":"info","message":"New PostgreSQL client connected","service":"fintech-auth","timestamp":"2026-04-07 23:06:53"}
+{"email":"test@example.com","ip":"::1","level":"info","message":"Successful login","service":"fintech-auth","timestamp":"2026-04-07 23:06:54","userId":"d7a605c2-c8cb-40e2-8b02-50f44511e27e"}
+{"level":"info","message":"Login alert email sent","messageId":"<d0462d1e-3ac7-0d9d-c6fe-f426f39e55fa@sentiquant.org>","service":"fintech-auth","timestamp":"2026-04-07 23:06:54","userEmail":"test@example.com"}
+{"level":"info","message":"🚀 Server running on port 5001 [development]","service":"fintech-auth","timestamp":"2026-04-08 00:29:03"}
+{"level":"info","message":"Redis client connected","service":"fintech-auth","timestamp":"2026-04-08 00:29:03"}
+{"level":"info","message":"Redis client ready","service":"fintech-auth","timestamp":"2026-04-08 00:29:03"}

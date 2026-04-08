@@ -1,0 +1,2 @@
+{"error":"Message failed: 553 Sender is not allowed to relay emails","level":"error","message":"Failed to send welcome email","service":"fintech-auth","timestamp":"2026-03-19 01:12:16","userEmail":"bhattpawan1301@gmail.com"}
+{"error":"Message failed: 553 Sender is not allowed to relay emails","level":"error","message":"Failed to send login alert email","service":"fintech-auth","timestamp":"2026-03-19 01:29:52","userEmail":"bhattpawan1301@gmail.com"}

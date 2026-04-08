@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FintechApp — Dashboard</title>
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'DM Sans', sans-serif;
+      background: #090c10;
+      color: #e8eaf0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .card {
+      background: #0f1318;
+      border: 1px solid rgba(255,255,255,0.07);
+      border-radius: 16px;
+      padding: 40px;
+      width: 100%;
+      max-width: 480px;
+      text-align: center;
+    }
+    .brand {
+      display: flex; align-items: center; justify-content: center; gap: 10px;
+      margin-bottom: 28px;
+    }
+    .brand-mark {
+      width: 36px; height: 36px;
+      background: #00d4aa;
+      border-radius: 10px;
+      display: grid; place-items: center;
+    }
+    .brand-name { font-family: 'Syne', sans-serif; font-size: 18px; font-weight: 700; }
+    .avatar {
+      width: 64px; height: 64px;
+      border-radius: 16px;
+      background: linear-gradient(135deg, #00d4aa, #6366f1);
+      display: grid; place-items: center;
+      font-family: 'Syne', sans-serif;
+      font-size: 24px; font-weight: 700;
+      color: #0a0e12;
+      margin: 0 auto 16px;
+    }
+    .welcome { font-family: 'Syne', sans-serif; font-size: 22px; font-weight: 700; margin-bottom: 6px; }
+    .email { font-size: 14px; color: #6b7280; margin-bottom: 28px; }
+    .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 28px; text-align: left; }
+    .info-box {
+      background: rgba(255,255,255,0.03);
+      border: 1px solid rgba(255,255,255,0.07);
+      border-radius: 10px;
+      padding: 14px;
+    }
+    .info-label { font-size: 11px; color: #4b5563; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; margin-bottom: 6px; }
+    .info-value { font-size: 14px; font-weight: 500; color: #e8eaf0; word-break: break-all; }
+    .status-pill {
+      display: inline-flex; align-items: center; gap: 6px;
+      background: rgba(52,211,153,0.08);
+      border: 1px solid rgba(52,211,153,0.2);
+      border-radius: 100px;
+      padding: 5px 14px;
+      font-size: 12px; color: #34d399;
+      margin-bottom: 28px;
+    }
+    .dot { width: 6px; height: 6px; border-radius: 50%; background: #34d399; animation: pulse 2s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+    .logout-btn {
+      width: 100%; height: 46px;
+      border: 1px solid rgba(255,255,255,0.07);
+      border-radius: 10px;
+      background: transparent;
+      color: #6b7280;
+      font-family: 'DM Sans', sans-serif;
+      font-size: 14px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .logout-btn:hover { border-color: rgba(248,113,113,0.3); color: #f87171; }
+    .error-msg { color: #f87171; font-size: 14px; margin-bottom: 20px; display: none; }
+  </style>
+</head>
+<body>
+<div class="card">
+  <div class="brand">
+    <div class="brand-mark">
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+        <path d="M10 2L17 6V14L10 18L3 14V6L10 2Z" fill="#0a0e12"/>
+        <path d="M10 6L14 8.5V13.5L10 16L6 13.5V8.5L10 6Z" fill="#00d4aa"/>
+      </svg>
+    </div>
+    <span class="brand-name">FintechApp</span>
+  </div>
+  <div class="avatar" id="avatar">?</div>
+  <div class="welcome" id="welcome">Loading…</div>
+  <div class="email" id="email">—</div>
+  <div class="status-pill"><div class="dot"></div>Authenticated</div>
+  <div class="info-grid">
+    <div class="info-box">
+      <div class="info-label">User ID</div>
+      <div class="info-value" id="user-id">—</div>
+    </div>
+    <div class="info-box">
+      <div class="info-label">Member Since</div>
+      <div class="info-value" id="joined">—</div>
+    </div>
+    <div class="info-box">
+      <div class="info-label">Server</div>
+      <div class="info-value" id="server-status">Checking…</div>
+    </div>
+    <div class="info-box">
+      <div class="info-label">Token</div>
+      <div class="info-value" id="token-status">Checking…</div>
+    </div>
+  </div>
+  <div class="error-msg" id="error-msg"></div>
+  <button class="logout-btn" onclick="logout()">Sign Out</button>
+</div>
+<script>
+  const API = 'http://localhost:5000/api';
+  async function init() {
+    const token = localStorage.getItem('accessToken');
+    if (!token) { window.location.href = 'index.html'; return; }
+    try {
+      const payload = JSON.parse(atob(token.split('.')[1]));
+      const minLeft = Math.round((payload.exp * 1000 - Date.now()) / 60000);
+      const el = document.getElementById('token-status');
+      if (minLeft > 0) { el.textContent = 'Valid · ' + minLeft + 'm left'; el.style.color = '#34d399'; }
+      else { el.textContent = 'Expired'; el.style.color = '#f87171'; }
+    } catch { document.getElementById('token-status').textContent = 'Invalid'; }
+    try {
+      const res = await fetch(API + '/auth/me', { headers: { Authorization: 'Bearer ' + token } });
+      const data = await res.json();
+      if (!data.success) { showError('Session expired. Redirecting…'); setTimeout(() => window.location.href = 'index.html', 2000); return; }
+      const u = data.user;
+      const name = [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email.split('@')[0];
+      document.getElementById('avatar').textContent = name.slice(0,2).toUpperCase();
+      document.getElementById('welcome').textContent = 'Welcome, ' + name + '!';
+      document.getElementById('email').textContent = u.email;
+      document.getElementById('user-id').textContent = u.id.slice(0,8) + '…';
+      document.getElementById('joined').textContent = new Date(u.created_at).toLocaleDateString('en-US', {year:'numeric',month:'short',day:'numeric'});
+    } catch { showError('Could not connect to server.'); }
+    try {
+      const res = await fetch('http://localhost:5000/health');
+      const data = await res.json();
+      const el = document.getElementById('server-status');
+      el.textContent = data.status === 'ok' ? 'Online ✓' : 'Issue';
+      el.style.color = data.status === 'ok' ? '#34d399' : '#f87171';
+    } catch { document.getElementById('server-status').textContent = 'Offline'; document.getElementById('server-status').style.color = '#f87171'; }
+  }
+  function showError(msg) { const el = document.getElementById('error-msg'); el.textContent = msg; el.style.display = 'block'; }
+  async function logout() {
+    const token = localStorage.getItem('accessToken');
+    const rt = localStorage.getItem('refreshToken');
+    try { await fetch(API + '/auth/logout', { method: 'POST', headers: {'Content-Type':'application/json', Authorization: 'Bearer ' + token}, body: JSON.stringify({refreshToken: rt}) }); } catch {}
+    localStorage.removeItem('accessToken');
+    localStorage.removeItem('refreshToken');
+    window.location.href = 'index.html';
+  }
+  init();
+</script>
+</body>
+</html>
