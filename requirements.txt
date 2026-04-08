@@ -1,30 +1,37 @@
-# Instructs pip to use the PyTorch repository for CPU-only packages
+# Use PyTorch CPU wheels
 --extra-index-url https://download.pytorch.org/whl/cpu
 
-# Flask and Web Server
+# Core Web Framework
 Flask==2.3.3
 Flask-CORS==4.0.0
-waitress==2.1.2
 gunicorn==21.2.0
 
-# Environment and Utilities
+# Environment & Utilities
 python-dotenv==1.0.0
 requests==2.31.0
-colorama==0.4.6
 python-dateutil==2.8.2
+colorama==0.4.6
 joblib==1.3.2
 
-# Data Science and Finance
+# Auth & Security
+PyJWT==2.8.0
+
+# Caching / Infra
+redis==5.0.1
+backoff==2.2.1
+
+# Data & Finance
 pandas==2.1.0
 numpy==1.26.4
 scikit-learn==1.3.0
-matplotlib==3.7.2
-seaborn==0.12.2
 yfinance==0.2.37
 beautifulsoup4==4.12.2
-# eodhd package removed - using direct API calls instead
 
-# Machine Learning and NLP
+# Visualization (optional but fine)
+matplotlib==3.7.2
+seaborn==0.12.2
+
+# Machine Learning / NLP
 torch==2.2.0+cpu
 torchvision==0.17.0+cpu
 torchaudio==2.2.0+cpu
@@ -32,4 +39,3 @@ transformers==4.44.2
 sentence-transformers==3.0.1
 huggingface-hub==0.24.6
 textblob==0.17.1
-backoff
