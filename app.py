@@ -34,7 +34,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# --- CHANGE 1: CORS Configuration (FIXED) ---
+# --- CORS Configuration ---
 ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "http://127.0.0.1:5500",
@@ -68,12 +68,11 @@ SEBI_DISCLAIMER = {
 }
 
 
-# --- OPTIONAL: JWT Helper (Pro-Level) ---
+# --- JWT Helper ---
 def decode_token(token):
     """Centralized token decoding logic with configuration safety check."""
     secret = os.getenv("JWT_SECRET")
     if not secret:
-        # This triggers a 500 in the calling function
         raise RuntimeError("Server misconfigured: JWT_SECRET missing")
 
     return jwt.decode(
@@ -87,7 +86,7 @@ def decode_token(token):
     )
 
 
-# --- JWT Auth Utilities (IMPROVED) ---
+# --- JWT Auth Utilities ---
 def verify_token():
     auth = request.headers.get("Authorization")
     if not auth:
@@ -95,7 +94,6 @@ def verify_token():
     try:
         token = auth.split(" ")[1]
         return decode_token(token)
-    # --- CHANGE 2 & 3: Improved Error Handling ---
     except jwt.ExpiredSignatureError:
         logger.warning("JWT ERROR: Token expired")
         return None
@@ -123,7 +121,6 @@ def token_required(f):
 
         try:
             request.user = decode_token(token)
-        # --- CHANGE 2 & 3: Improved Error Handling ---
         except RuntimeError as e:
             return jsonify({'success': False, 'error': str(e)}), 500
         except jwt.ExpiredSignatureError:
@@ -153,8 +150,6 @@ def inject_disclaimer(response):
             logger.debug(f"Could not inject disclaimer: {e}")
     return response
 
-
-# [Rest of the TradingAPI class and endpoints remain unchanged...]
 
 class TradingAPI:
     """Handles all trading logic and system interactions."""
@@ -440,8 +435,9 @@ trading_api = TradingAPI()
 
 
 # --- API Endpoints ---
+
+# FIX 1: Public endpoint — no @token_required
 @app.route('/api/stocks', methods=['GET'])
-@token_required
 def get_all_stocks():
     cache_key = "all_stocks"
     if cached := get_from_cache(cache_key):
@@ -476,18 +472,18 @@ def analyze_stock(system_type, symbol):
         return jsonify({'success': False, 'error': 'An internal server error occurred'}), 500
 
 
+# FIX 2: Public endpoints — no @token_required
 @app.route('/api/analyze/swing/<symbol>', methods=['GET'])
-@token_required
 def analyze_swing_stock_endpoint(symbol):
     return analyze_stock('swing', symbol)
 
 
 @app.route('/api/analyze/position/<symbol>', methods=['GET'])
-@token_required
 def analyze_position_stock_endpoint(symbol):
     return analyze_stock('position', symbol)
 
 
+# FIX 3: Protected — portfolio stays behind auth
 @app.route('/api/portfolio/swing', methods=['POST'])
 @token_required
 def create_swing_portfolio_endpoint():
@@ -525,8 +521,8 @@ def create_position_portfolio_endpoint():
         return jsonify({'success': False, 'error': 'An internal server error occurred'}), 500
 
 
+# FIX 4: Public endpoint — no @token_required
 @app.route('/api/compare/<symbol>', methods=['GET'])
-@token_required
 def compare_strategies_endpoint(symbol):
     try:
         symbol = validate_symbol(symbol)
@@ -648,11 +644,8 @@ def internal_error(error):
     return jsonify({'success': False, 'error': 'Internal server error'}), 500
 
 
+# FIX 5: Removed waitress dependency — use Flask's built-in server
 if __name__ == "__main__":
-    from waitress import serve
-
-    logging.getLogger('waitress').setLevel(logging.WARNING)
-
     port = int(os.environ.get("PORT", 5000))
-    logger.info(f"Starting production server with Waitress on port {port}...")
-    serve(app, host="0.0.0.0", port=port)
+    logger.info(f"Starting server on port {port}...")
+    app.run(host="0.0.0.0", port=port)
