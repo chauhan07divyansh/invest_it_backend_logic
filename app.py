@@ -3,7 +3,7 @@ import redis
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import wraps
 import traceback
 import math
@@ -14,6 +14,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import jwt
+import bcrypt
+
+# Temporary in-memory user store (replace with DB later)
+users = {}
 
 from services.data_providers.stock_data_provider import StockDataProvider
 
@@ -34,7 +38,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# --- CORS Configuration ---
+# --- CHANGE 1: CORS Configuration (FIXED) ---
 ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "http://127.0.0.1:5500",
@@ -68,11 +72,12 @@ SEBI_DISCLAIMER = {
 }
 
 
-# --- JWT Helper ---
+# --- OPTIONAL: JWT Helper (Pro-Level) ---
 def decode_token(token):
     """Centralized token decoding logic with configuration safety check."""
     secret = os.getenv("JWT_SECRET")
     if not secret:
+        # This triggers a 500 in the calling function
         raise RuntimeError("Server misconfigured: JWT_SECRET missing")
 
     return jwt.decode(
@@ -86,7 +91,7 @@ def decode_token(token):
     )
 
 
-# --- JWT Auth Utilities ---
+# --- JWT Auth Utilities (IMPROVED) ---
 def verify_token():
     auth = request.headers.get("Authorization")
     if not auth:
@@ -94,6 +99,7 @@ def verify_token():
     try:
         token = auth.split(" ")[1]
         return decode_token(token)
+    # --- CHANGE 2 & 3: Improved Error Handling ---
     except jwt.ExpiredSignatureError:
         logger.warning("JWT ERROR: Token expired")
         return None
@@ -121,6 +127,7 @@ def token_required(f):
 
         try:
             request.user = decode_token(token)
+        # --- CHANGE 2 & 3: Improved Error Handling ---
         except RuntimeError as e:
             return jsonify({'success': False, 'error': str(e)}), 500
         except jwt.ExpiredSignatureError:
@@ -150,6 +157,8 @@ def inject_disclaimer(response):
             logger.debug(f"Could not inject disclaimer: {e}")
     return response
 
+
+# [Rest of the TradingAPI class and endpoints remain unchanged...]
 
 class TradingAPI:
     """Handles all trading logic and system interactions."""
@@ -435,9 +444,8 @@ trading_api = TradingAPI()
 
 
 # --- API Endpoints ---
-
-# FIX 1: Public endpoint — no @token_required
 @app.route('/api/stocks', methods=['GET'])
+@token_required
 def get_all_stocks():
     cache_key = "all_stocks"
     if cached := get_from_cache(cache_key):
@@ -472,18 +480,18 @@ def analyze_stock(system_type, symbol):
         return jsonify({'success': False, 'error': 'An internal server error occurred'}), 500
 
 
-# FIX 2: Public endpoints — no @token_required
 @app.route('/api/analyze/swing/<symbol>', methods=['GET'])
+@token_required
 def analyze_swing_stock_endpoint(symbol):
     return analyze_stock('swing', symbol)
 
 
 @app.route('/api/analyze/position/<symbol>', methods=['GET'])
+@token_required
 def analyze_position_stock_endpoint(symbol):
     return analyze_stock('position', symbol)
 
 
-# FIX 3: Protected — portfolio stays behind auth
 @app.route('/api/portfolio/swing', methods=['POST'])
 @token_required
 def create_swing_portfolio_endpoint():
@@ -521,8 +529,8 @@ def create_position_portfolio_endpoint():
         return jsonify({'success': False, 'error': 'An internal server error occurred'}), 500
 
 
-# FIX 4: Public endpoint — no @token_required
 @app.route('/api/compare/<symbol>', methods=['GET'])
+@token_required
 def compare_strategies_endpoint(symbol):
     try:
         symbol = validate_symbol(symbol)
@@ -547,6 +555,49 @@ def compare_strategies_endpoint(symbol):
     except Exception as e:
         logger.error(f"Error in compare/{symbol}: {e}\n{traceback.format_exc()}")
         return jsonify({'success': False, 'error': 'An internal server error occurred'}), 500
+
+
+@app.route('/api/auth/register', methods=['POST'])
+def register():
+    data = request.get_json()
+    email = data.get('email', '').lower()
+    password = data.get('password')
+
+    if not email or not password:
+        return jsonify({'success': False, 'error': 'Email and password required'}), 400
+
+    if email in users:
+        return jsonify({'success': False, 'error': 'User already exists'}), 400
+
+    hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt())
+    users[email] = hashed
+
+    return jsonify({'success': True, 'message': 'User registered successfully'})
+
+
+@app.route('/api/auth/login', methods=['POST'])
+def login():
+    data = request.get_json()
+    email = data.get('email', '').lower()
+    password = data.get('password')
+
+    if email not in users:
+        return jsonify({'success': False, 'error': 'User not found'}), 401
+
+    stored_hash = users[email]
+
+    if not bcrypt.checkpw(password.encode(), stored_hash):
+        return jsonify({'success': False, 'error': 'Invalid password'}), 401
+
+    token = jwt.encode({
+        'email': email,
+        'exp': datetime.utcnow() + timedelta(minutes=15)
+    }, os.getenv("JWT_SECRET"), algorithm="HS256")
+
+    return jsonify({
+        'success': True,
+        'token': token
+    })
 
 
 @app.route('/api/health', methods=['GET'])
@@ -644,8 +695,11 @@ def internal_error(error):
     return jsonify({'success': False, 'error': 'Internal server error'}), 500
 
 
-# FIX 5: Removed waitress dependency — use Flask's built-in server
 if __name__ == "__main__":
+    from waitress import serve
+
+    logging.getLogger('waitress').setLevel(logging.WARNING)
+
     port = int(os.environ.get("PORT", 5000))
-    logger.info(f"Starting server on port {port}...")
-    app.run(host="0.0.0.0", port=port)
+    logger.info(f"Starting production server with Waitress on port {port}...")
+    serve(app, host="0.0.0.0", port=port)
