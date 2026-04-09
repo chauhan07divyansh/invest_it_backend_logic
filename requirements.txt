@@ -41,3 +41,4 @@ huggingface-hub==0.24.6
 textblob==0.17.1
 fyers-apiv3
 waitress
+bcrypt
