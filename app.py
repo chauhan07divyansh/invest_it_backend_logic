@@ -445,7 +445,6 @@ trading_api = TradingAPI()
 
 # --- API Endpoints ---
 @app.route('/api/stocks', methods=['GET'])
-@token_required
 def get_all_stocks():
     cache_key = "all_stocks"
     if cached := get_from_cache(cache_key):
@@ -481,13 +480,11 @@ def analyze_stock(system_type, symbol):
 
 
 @app.route('/api/analyze/swing/<symbol>', methods=['GET'])
-@token_required
 def analyze_swing_stock_endpoint(symbol):
     return analyze_stock('swing', symbol)
 
 
 @app.route('/api/analyze/position/<symbol>', methods=['GET'])
-@token_required
 def analyze_position_stock_endpoint(symbol):
     return analyze_stock('position', symbol)
 
@@ -530,7 +527,6 @@ def create_position_portfolio_endpoint():
 
 
 @app.route('/api/compare/<symbol>', methods=['GET'])
-@token_required
 def compare_strategies_endpoint(symbol):
     try:
         symbol = validate_symbol(symbol)
