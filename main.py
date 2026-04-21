@@ -25,7 +25,7 @@ try:
     from passlib.context import CryptContext
     pwd_context = CryptContext(
         schemes=["argon2", "bcrypt"],
-        deprecated="auto",          # bcrypt hashes auto-upgrade to argon2 on next login
+        deprecated="auto",
         argon2__rounds=4,
         argon2__memory_cost=65536,
     )
@@ -59,23 +59,18 @@ db = SQLAlchemy(app)
 # ── DB Models ─────────────────────────────────────────────────────────────────
 
 class User(db.Model):
-    """Core user account."""
     __tablename__ = 'users'
     id            = db.Column(db.Integer, primary_key=True)
     email         = db.Column(db.String(255), unique=True, nullable=False, index=True)
-    password_hash = db.Column(db.String(512), nullable=False)   # NEW-5: string (argon2 hash)
-    # NEW-3: subscription plan
-    plan          = db.Column(db.String(20), nullable=False, default='FREE')   # FREE | PRO | ENTERPRISE
-    # NEW-6: email verification
+    password_hash = db.Column(db.String(512), nullable=False)
+    plan          = db.Column(db.String(20), nullable=False, default='FREE')
     is_verified   = db.Column(db.Boolean, nullable=False, default=False)
     verify_token  = db.Column(db.String(64), nullable=True)
     created_at    = db.Column(db.DateTime, default=datetime.utcnow)
     usages        = db.relationship('UserUsage', backref='user', lazy=True)
 
 
-# NEW-2: Usage tracking table
 class UserUsage(db.Model):
-    """Per-request usage log for billing & analytics."""
     __tablename__ = 'user_usage'
     id             = db.Column(db.Integer, primary_key=True)
     user_id        = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
@@ -127,7 +122,7 @@ SEBI_DISCLAIMER = {
     "last_updated": "2024-11-19"
 }
 
-# ── Plan limits (NEW-3) ───────────────────────────────────────────────────────
+# ── Plan limits ───────────────────────────────────────────────────────────────
 PLAN_LIMITS = {
     'FREE':       {'analyze': True,  'portfolio': True,  'compare': False, 'daily_calls': 10,  'portfolio_per_day': 1},
     'PRO':        {'analyze': True,  'portfolio': True,  'compare': True,  'daily_calls': 500, 'portfolio_per_day': 999},
@@ -135,8 +130,8 @@ PLAN_LIMITS = {
 }
 
 # ── Redis cache ───────────────────────────────────────────────────────────────
-CACHE_TIMEOUT  = 300    # 5 min for live requests
-PRECOMPUTE_TTL = 86400  # 24 h for background-worker results
+CACHE_TIMEOUT  = 300
+PRECOMPUTE_TTL = 86400
 
 redis_client = None
 simple_cache = {}
@@ -176,30 +171,14 @@ def set_cache(key: str, value, ttl: int = CACHE_TIMEOUT):
     simple_cache[key] = (value, datetime.now().timestamp())
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# NEW-1: Background Precompute
-# ─────────────────────────────────────────────────────────────────────────────
-# The API checks the precompute cache first (key: "pre_{type}_{symbol}").
-# If present → instant response, zero Fyers cost.
-# worker.py refreshes these keys on a cron schedule.
-# ThreadPoolExecutor provides on-demand warming for uncached symbols.
-# ─────────────────────────────────────────────────────────────────────────────
-
-# Executor used only for async email sending (register endpoint)
 _executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
 
 
 def get_precomputed(system_type: str, symbol: str):
-    """Read precomputed result written by worker.py. Returns None if not yet available."""
     return get_from_cache(f"pre_{system_type}_{symbol}")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# NEW-4: @backoff retry wrapper for external API calls
-# ─────────────────────────────────────────────────────────────────────────────
-
 def _fetch_with_retry(func, *args, **kwargs):
-    """Wraps any external call with exponential backoff (max 3 tries)."""
     @backoff.on_exception(
         backoff.expo,
         Exception,
@@ -215,9 +194,7 @@ def _fetch_with_retry(func, *args, **kwargs):
     return _inner()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# NEW-5: Password helpers (passlib argon2 / bcrypt fallback)
-# ─────────────────────────────────────────────────────────────────────────────
+# ── Password helpers ──────────────────────────────────────────────────────────
 
 def hash_password(plain: str) -> str:
     if PASSLIB_AVAILABLE:
@@ -237,16 +214,9 @@ def password_needs_rehash(hashed: str) -> bool:
     return False
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# NEW-6: Email verification helpers
-# ─────────────────────────────────────────────────────────────────────────────
+# ── Email verification helpers ────────────────────────────────────────────────
 
 def _send_verification_email(to_email: str, token: str):
-    """
-    Sends a verification link via SMTP.
-    Required .env vars: SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, APP_BASE_URL
-    Falls back to logging the link if SMTP is not configured (dev mode).
-    """
     base_url = os.getenv("APP_BASE_URL", "http://localhost:5000")
     link = f"{base_url}/api/v1/auth/verify-email?token={token}"
 
@@ -274,29 +244,25 @@ def _send_verification_email(to_email: str, token: str):
         logger.error(f"Failed to send verification email to {to_email}: {e}")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Request lifecycle hooks
-# ─────────────────────────────────────────────────────────────────────────────
+# ── Request lifecycle hooks ───────────────────────────────────────────────────
 
 @app.before_request
 def attach_request_id():
-    g.request_id    = str(uuid.uuid4())[:8]
-    g.user_email    = "anon"
-    g.user_id       = None
-    g.user_plan     = "FREE"
-    g.cache_hit     = False
-    g.current_symbol= None
-    g.request_start = datetime.now()
+    g.request_id     = str(uuid.uuid4())[:8]
+    g.user_email     = "anon"
+    g.user_id        = None
+    g.user_plan      = "FREE"
+    g.cache_hit      = False
+    g.current_symbol = None
+    g.request_start  = datetime.now()
 
 
 def log_context():
     return f"[{getattr(g, 'request_id', '?')}] [{getattr(g, 'user_email', 'anon')}]"
 
 
-# NEW-2: Usage tracking + disclaimer injection on every response
 @app.after_request
 def track_usage_and_disclaimer(response):
-    # Inject SEBI disclaimer into successful JSON responses
     if response.content_type == 'application/json' and response.status_code == 200:
         try:
             data = response.get_json()
@@ -306,7 +272,6 @@ def track_usage_and_disclaimer(response):
         except Exception:
             pass
 
-    # Log usage for all /api/ routes
     if request.path.startswith('/api/') and request.method in ('GET', 'POST'):
         try:
             elapsed_ms = int((datetime.now() - g.request_start).total_seconds() * 1000) \
@@ -336,9 +301,7 @@ def _estimate_cost(path: str) -> float:
     return 0.1
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# JWT helpers
-# ─────────────────────────────────────────────────────────────────────────────
+# ── JWT helpers ───────────────────────────────────────────────────────────────
 
 def decode_token(token):
     secret = os.getenv("JWT_SECRET")
@@ -380,15 +343,7 @@ def token_required(f):
     return decorated
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# NEW-3: Subscription enforcement decorator
-# ─────────────────────────────────────────────────────────────────────────────
-
 def plan_required(feature: str):
-    """
-    @plan_required('portfolio') blocks FREE users from portfolio endpoints.
-    Must be placed AFTER @token_required.
-    """
     def decorator(f):
         @wraps(f)
         def decorated(*args, **kwargs):
@@ -405,10 +360,6 @@ def plan_required(feature: str):
     return decorator
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Systems guard decorator
-# ─────────────────────────────────────────────────────────────────────────────
-
 def require_systems(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -422,16 +373,11 @@ def require_systems(f):
 
 
 def check_portfolio_daily_limit(f):
-    """
-    Enforces per-day portfolio generation limit based on plan.
-    FREE: 1 portfolio/day   PRO/ENTERPRISE: unlimited
-    Must be placed AFTER @token_required.
-    """
     @wraps(f)
     def decorated(*args, **kwargs):
-        plan      = getattr(g, 'user_plan', 'FREE')
-        user_id   = getattr(g, 'user_id', None)
-        limit     = PLAN_LIMITS.get(plan, PLAN_LIMITS['FREE']).get('portfolio_per_day', 1)
+        plan    = getattr(g, 'user_plan', 'FREE')
+        user_id = getattr(g, 'user_id', None)
+        limit   = PLAN_LIMITS.get(plan, PLAN_LIMITS['FREE']).get('portfolio_per_day', 1)
 
         if limit < 999 and user_id:
             try:
@@ -457,9 +403,7 @@ def check_portfolio_daily_limit(f):
     return decorated
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Validation helpers
-# ─────────────────────────────────────────────────────────────────────────────
+# ── Validation helpers ────────────────────────────────────────────────────────
 
 NSE_SYMBOLS = set()
 try:
@@ -505,9 +449,7 @@ def validate_time_period(tp):
         raise ValueError("Time period must be a valid integer")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# TradingAPI class
-# ─────────────────────────────────────────────────────────────────────────────
+# ── TradingAPI class ──────────────────────────────────────────────────────────
 
 class TradingAPI:
     def __init__(self):
@@ -578,13 +520,13 @@ class TradingAPI:
             mgmt_note      = backend_plan.get('trade_management_note', '')
             current_price  = result.get('current_price', 0)
             return {
-                'signal':              entry_signal,
-                'strategy':            self._enhance_strategy_description(entry_strategy, entry_signal, system_type),
-                'entry_price':         f"Around {current_price:.2f}" if current_price > 0 else 'N/A',
-                'stop_loss':           f"{stop_loss:.2f}" if isinstance(stop_loss, (int, float)) and stop_loss > 0 else 'N/A',
-                'target_1':            f"{targets.get('target_1', 0):.2f}" if targets.get('target_1') else 'N/A',
-                'target_2':            f"{targets.get('target_2', 0):.2f}" if targets.get('target_2') else 'N/A',
-                'target_3':            f"{targets.get('target_3', 0):.2f}" if targets.get('target_3') else 'N/A',
+                'signal':               entry_signal,
+                'strategy':             self._enhance_strategy_description(entry_strategy, entry_signal, system_type),
+                'entry_price':          f"Around {current_price:.2f}" if current_price > 0 else 'N/A',
+                'stop_loss':            f"{stop_loss:.2f}" if isinstance(stop_loss, (int, float)) and stop_loss > 0 else 'N/A',
+                'target_1':             f"{targets.get('target_1', 0):.2f}" if targets.get('target_1') else 'N/A',
+                'target_2':             f"{targets.get('target_2', 0):.2f}" if targets.get('target_2') else 'N/A',
+                'target_3':             f"{targets.get('target_3', 0):.2f}" if targets.get('target_3') else 'N/A',
                 'trailing_stop_advice': mgmt_note or 'Consider moving stop loss to breakeven after hitting Target 1.',
             }
         except Exception as e:
@@ -616,12 +558,12 @@ class TradingAPI:
     def format_analysis_response(self, result, system_type):
         if not result:
             return None
-        score_key    = 'swing_score' if system_type == 'Swing' else 'position_score'
-        score        = result.get(score_key, 0)
-        current_price= result.get('current_price', 0)
-        all_targets  = self.extract_targets_from_backend(result)
-        target_price = all_targets.get('target_2', 0) or all_targets.get('target_1', current_price)
-        potential_ret= ((target_price - current_price) / current_price * 100) if current_price > 0 else 0
+        score_key     = 'swing_score' if system_type == 'Swing' else 'position_score'
+        score         = result.get(score_key, 0)
+        current_price = result.get('current_price', 0)
+        all_targets   = self.extract_targets_from_backend(result)
+        target_price  = all_targets.get('target_2', 0) or all_targets.get('target_1', current_price)
+        potential_ret = ((target_price - current_price) / current_price * 100) if current_price > 0 else 0
         grade = ("A+ (Excellent)" if score >= 80 else "A (Good)" if score >= 70
                  else "B (Average)" if score >= 60 else "C (Below Average)" if score >= 50 else "D (Poor)")
         trading_plan   = self.generate_trading_plan(result, system_type)
@@ -680,13 +622,13 @@ class TradingAPI:
     def generate_swing_portfolio(self, budget, risk_appetite):
         if not self.swing_system:
             raise ConnectionAbortedError('Swing trading system not available')
-        all_stocks     = _fetch_with_retry(self.swing_system.get_all_stock_symbols)   # NEW-4
+        all_stocks  = _fetch_with_retry(self.swing_system.get_all_stock_symbols)
         all_results = self.swing_system.analyze_stocks_parallel(all_stocks)
-        filtered       = self.swing_system.filter_stocks_by_risk_appetite(all_results, risk_appetite)
+        filtered    = self.swing_system.filter_stocks_by_risk_appetite(all_results, risk_appetite)
         portfolio_list = self.swing_system.generate_portfolio_allocation(filtered, budget, risk_appetite)
-        std        = self._standardize_portfolio_keys(portfolio_list)
-        total_alloc= sum(i.get('investment_amount', 0) for i in std)
-        avg_score  = sum(i.get('score', 0) for i in std) / len(std) if std else 0
+        std         = self._standardize_portfolio_keys(portfolio_list)
+        total_alloc = sum(i.get('investment_amount', 0) for i in std)
+        avg_score   = sum(i.get('score', 0) for i in std) / len(std) if std else 0
         return {'portfolio': std, 'summary': {
             'total_budget': budget, 'total_allocated': total_alloc,
             'remaining_cash': budget - total_alloc, 'diversification': len(std), 'average_score': avg_score}}
@@ -694,14 +636,14 @@ class TradingAPI:
     def generate_position_portfolio(self, budget, risk_appetite, time_period):
         if not self.position_system:
             raise ConnectionAbortedError('Position trading system not available')
-        results        = _fetch_with_retry(                                            # NEW-4
+        results        = _fetch_with_retry(
             self.position_system.create_personalized_portfolio, risk_appetite, time_period, budget)
         portfolio_data = results.get('portfolio', {})
         portfolio_list = ([{**v, 'symbol': k} for k, v in portfolio_data.items()]
                           if isinstance(portfolio_data, dict) else portfolio_data)
-        std        = self._standardize_portfolio_keys(portfolio_list)
-        total_alloc= sum(i.get('investment_amount', 0) for i in std)
-        avg_score  = sum(i.get('score', 0) for i in std) / len(std) if std else 0
+        std         = self._standardize_portfolio_keys(portfolio_list)
+        total_alloc = sum(i.get('investment_amount', 0) for i in std)
+        avg_score   = sum(i.get('score', 0) for i in std) / len(std) if std else 0
         return {'portfolio': std, 'summary': {
             'total_budget': budget, 'total_allocated': total_alloc,
             'remaining_cash': budget - total_alloc, 'diversification': len(std), 'average_score': avg_score}}
@@ -710,9 +652,7 @@ class TradingAPI:
 trading_api = TradingAPI()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Blueprint v1
-# ─────────────────────────────────────────────────────────────────────────────
+# ── Blueprint v1 ──────────────────────────────────────────────────────────────
 
 v1 = Blueprint('v1', __name__, url_prefix='/api/v1')
 
@@ -732,13 +672,13 @@ def register():
     if User.query.filter_by(email=email).first():
         return jsonify({'success': False, 'error': 'User already exists'}), 409
 
-    hashed       = hash_password(password)                  # NEW-5: argon2
-    verify_token = uuid.uuid4().hex                         # NEW-6
+    hashed       = hash_password(password)
+    verify_token = uuid.uuid4().hex
     user = User(email=email, password_hash=hashed, verify_token=verify_token)
     db.session.add(user)
     db.session.commit()
 
-    _executor.submit(_send_verification_email, email, verify_token)  # NEW-6: async email
+    _executor.submit(_send_verification_email, email, verify_token)
 
     logger.info(f"{log_context()} Registered: {email}")
     return jsonify({
@@ -749,7 +689,6 @@ def register():
 
 @v1.route('/auth/verify-email', methods=['GET'])
 def verify_email():
-    """NEW-6: Handles the link clicked in the verification email."""
     token = request.args.get('token', '')
     if not token:
         return jsonify({'success': False, 'error': 'Token required'}), 400
@@ -760,6 +699,25 @@ def verify_email():
     user.verify_token = None
     db.session.commit()
     return jsonify({'success': True, 'message': 'Email verified. You can now log in.'})
+
+
+# ── TEMPORARY: Direct verify endpoint (remove after initial setup) ─────────────
+@v1.route('/auth/verify-direct', methods=['POST'])
+def verify_direct():
+    """TEMPORARY: Direct email verification without token. Remove after setup."""
+    admin_key = request.headers.get('X-Admin-Key', '')
+    if admin_key != os.getenv('ADMIN_KEY', ''):
+        return jsonify({'success': False, 'error': 'Unauthorized'}), 401
+    data  = request.get_json() or {}
+    email = data.get('email', '').lower().strip()
+    user  = User.query.filter_by(email=email).first()
+    if not user:
+        return jsonify({'success': False, 'error': 'User not found'}), 404
+    user.is_verified  = True
+    user.verify_token = None
+    db.session.commit()
+    logger.info(f"[admin] Manually verified: {email}")
+    return jsonify({'success': True, 'message': f'{email} verified.'})
 
 
 @v1.route('/auth/login', methods=['POST'])
@@ -774,22 +732,20 @@ def login():
         return jsonify({'success': False, 'error': 'Server misconfigured'}), 500
 
     user = User.query.filter_by(email=email).first()
-    if not user or not verify_password(password, user.password_hash):   # NEW-5
+    if not user or not verify_password(password, user.password_hash):
         return jsonify({'success': False, 'error': 'Invalid credentials'}), 401
 
-    if not user.is_verified:                                             # NEW-6
+    if not user.is_verified:
         return jsonify({
             'success': False,
             'error':   'Please verify your email before logging in.'
         }), 403
 
-    # NEW-5: transparent argon2 upgrade on login
     if password_needs_rehash(user.password_hash):
         user.password_hash = hash_password(password)
         db.session.commit()
         logger.info(f"Password upgraded to argon2 for {email}")
 
-    # NEW-3: embed plan in JWT so decorators can read it without a DB query
     token_payload = {
         'email':   email,
         'user_id': user.id,
@@ -827,9 +783,11 @@ def refresh_token_endpoint():
         if payload.get('type') != 'refresh':
             return jsonify({'success': False, 'error': 'Invalid token type'}), 401
         new_token = jwt.encode({
-            'email': payload['email'], 'user_id': payload.get('user_id'),
-            'plan': payload.get('plan', 'FREE'), 'type': 'access',
-            'exp': datetime.utcnow() + timedelta(minutes=15)
+            'email':   payload['email'],
+            'user_id': payload.get('user_id'),
+            'plan':    payload.get('plan', 'FREE'),
+            'type':    'access',
+            'exp':     datetime.utcnow() + timedelta(minutes=15)
         }, secret, algorithm="HS256")
         return jsonify({'success': True, 'access_token': new_token, 'expires_in': 900})
     except jwt.ExpiredSignatureError:
@@ -855,32 +813,20 @@ def get_all_stocks():
 
 
 def analyze_stock(system_type: str, symbol: str):
-    """
-    3-tier cache lookup:
-      1. Precomputed (pre_{type}_{symbol}) — written by worker.py 1×/day.
-         After the morning run every symbol is in here → zero Fyers cost all day.
-      2. Short-term cache (5 min) — serves repeated hits between worker runs.
-      3. Live Fyers call — only if worker hasn't run yet today (e.g. first boot,
-         or a symbol added to nse_symbols.txt after today's run).
-         Result is cached for 5 min so the next request is also free.
-    """
     try:
         symbol = validate_symbol(symbol)
         g.current_symbol = symbol
 
-        # 1. Precomputed by worker (fastest path — no Fyers call)
         precomputed = get_precomputed(system_type, symbol)
         if precomputed:
             g.cache_hit = True
             return jsonify({'success': True, 'data': precomputed, 'source': 'precomputed'})
 
-        # 2. Short-term cache (e.g. same symbol requested twice within 5 min)
         cache_key = f"{system_type}_analysis_{symbol}"
         if cached := get_from_cache(cache_key):
             g.cache_hit = True
             return jsonify({'success': True, 'data': cached, 'source': 'cache'})
 
-        # 3. Live Fyers call (fallback — worker covers all symbols so this is rare)
         system = getattr(trading_api, f"{system_type}_system")
         if not system:
             return jsonify({'success': False, 'error': f'{system_type.capitalize()} system unavailable'}), 503
@@ -892,7 +838,7 @@ def analyze_stock(system_type: str, symbol: str):
             return jsonify({'success': False, 'error': f'Could not analyze {symbol}'}), 404
 
         formatted = trading_api.format_analysis_response(result, system_type.capitalize())
-        set_cache(cache_key, formatted)   # 5-min cache so repeated hits are free
+        set_cache(cache_key, formatted)
         return jsonify({'success': True, 'data': formatted, 'source': 'live'})
 
     except ValueError as e:
@@ -919,7 +865,7 @@ def analyze_position_stock_endpoint(symbol):
 @v1.route('/portfolio/swing', methods=['POST'])
 @token_required
 @plan_required('portfolio')
-@check_portfolio_daily_limit       # FREE: 1/day limit
+@check_portfolio_daily_limit
 @require_systems
 @limiter.limit("5 per minute")
 def create_swing_portfolio_endpoint():
@@ -939,7 +885,7 @@ def create_swing_portfolio_endpoint():
 @v1.route('/portfolio/position', methods=['POST'])
 @token_required
 @plan_required('portfolio')
-@check_portfolio_daily_limit       # FREE: 1/day limit
+@check_portfolio_daily_limit
 @require_systems
 @limiter.limit("5 per minute")
 def create_position_portfolio_endpoint():
@@ -959,7 +905,7 @@ def create_position_portfolio_endpoint():
 
 @v1.route('/compare/<symbol>', methods=['GET'])
 @token_required
-@plan_required('compare')          # NEW-3
+@plan_required('compare')
 @require_systems
 @limiter.limit("10 per minute")
 def compare_strategies_endpoint(symbol):
@@ -972,7 +918,7 @@ def compare_strategies_endpoint(symbol):
             return jsonify({'success': True, 'data': cached})
         if not trading_api.swing_system or not trading_api.position_system:
             return jsonify({'success': False, 'error': 'One or more systems unavailable'}), 503
-        swing_result    = _fetch_with_retry(trading_api.swing_system.analyze_swing_trading_stock, symbol)      # NEW-4
+        swing_result    = _fetch_with_retry(trading_api.swing_system.analyze_swing_trading_stock, symbol)
         position_result = _fetch_with_retry(trading_api.position_system.analyze_position_trading_stock, symbol)
         if not swing_result or not position_result:
             return jsonify({'success': False, 'error': f'Could not complete comparison for {symbol}'}), 404
@@ -1025,7 +971,6 @@ def get_disclaimer():
     return jsonify({'success': True, 'data': SEBI_DISCLAIMER})
 
 
-# NEW-2: Admin usage analytics endpoint
 @v1.route('/admin/usage', methods=['GET'])
 @token_required
 def usage_stats():
@@ -1042,11 +987,11 @@ def usage_stats():
             .order_by(db.desc('calls'))
             .all())
     data = [{
-        'endpoint':       r.endpoint,
-        'calls':          r.calls,
-        'total_cost':     round(r.total_cost or 0, 2),
-        'avg_response_ms':round(r.avg_ms or 0, 1),
-        'cache_hit_rate': round((r.cache_hits or 0) / r.calls * 100, 1),
+        'endpoint':        r.endpoint,
+        'calls':           r.calls,
+        'total_cost':      round(r.total_cost or 0, 2),
+        'avg_response_ms': round(r.avg_ms or 0, 1),
+        'cache_hit_rate':  round((r.cache_hits or 0) / r.calls * 100, 1),
     } for r in rows]
     return jsonify({'success': True, 'data': data, 'period_days': since_days})
 
@@ -1083,9 +1028,7 @@ def rate_limited(_): return jsonify({'success': False, 'error': 'Rate limit exce
 def server_error(_): return jsonify({'success': False, 'error': 'Internal server error'}), 500
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Entrypoint
-# ─────────────────────────────────────────────────────────────────────────────
+# ── Entrypoint ────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     from waitress import serve
