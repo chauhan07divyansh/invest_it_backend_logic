@@ -336,6 +336,52 @@ def _send_verification_email(to_email: str, token: str):
         logger.error(f"Failed to send verification email to {to_email}: {e}")
 
 
+def _send_login_alert(admin_email: str, user_email: str, ip: str, user_agent: str):
+    """Send a login alert email to the admin inbox on every successful login."""
+    smtp_host = os.getenv("SMTP_HOST")
+    if not smtp_host or not admin_email:
+        return
+
+    timestamp = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')
+    html = f"""
+    <div style="font-family:sans-serif;max-width:600px;margin:0 auto;background:#0f1117;color:#fff;border-radius:12px;overflow:hidden">
+      <div style="background:#0f1117;padding:32px;text-align:center;border-bottom:1px solid #1e2130">
+        <span style="font-size:24px;font-weight:bold">⚡ SentiQuant</span>
+        <p style="color:#8b8fa8;margin:4px 0 0">Security &amp; Authentication System</p>
+        <span style="background:#00c896;color:#000;padding:4px 16px;border-radius:4px;font-size:12px;font-weight:bold;display:inline-block;margin-top:12px">LOGIN DETECTED</span>
+      </div>
+      <div style="padding:32px">
+        <h2 style="margin:0 0 24px">New login to your platform</h2>
+        <table style="width:100%;border-collapse:collapse">
+          <tr><td style="color:#8b8fa8;padding:8px 0;width:140px">User</td><td style="color:#fff">{user_email}</td></tr>
+          <tr><td style="color:#8b8fa8;padding:8px 0">IP Address</td><td style="color:#fff">{ip}</td></tr>
+          <tr><td style="color:#8b8fa8;padding:8px 0">Device</td><td style="color:#fff;font-size:12px">{user_agent[:120]}</td></tr>
+          <tr><td style="color:#8b8fa8;padding:8px 0">Time</td><td style="color:#fff">{timestamp}</td></tr>
+        </table>
+        <p style="color:#8b8fa8;font-size:13px;margin-top:24px">
+          If this was not you, investigate immediately at your Render dashboard.
+        </p>
+      </div>
+      <div style="padding:16px 32px;border-top:1px solid #1e2130;text-align:center">
+        <p style="color:#8b8fa8;font-size:12px;margin:0">SentiQuant &mdash; AI Stock Analysis Platform</p>
+      </div>
+    </div>
+    """
+    msg = MIMEText(html, 'html')
+    msg['Subject'] = f'🔐 Login Alert: {user_email} signed in'
+    msg['From']    = os.getenv("SMTP_USER")
+    msg['To']      = admin_email
+
+    try:
+        with smtplib.SMTP(smtp_host, int(os.getenv("SMTP_PORT", 587))) as server:
+            server.starttls()
+            server.login(os.getenv("SMTP_USER"), os.getenv("SMTP_PASS"))
+            server.sendmail(msg["From"], [admin_email], msg.as_string())
+        logger.info(f"Login alert sent for {user_email}")
+    except Exception as e:
+        logger.error(f"Failed to send login alert for {user_email}: {e}")
+
+
 # ── Request lifecycle hooks ───────────────────────────────────────────────────
 
 @app.before_request
@@ -897,6 +943,12 @@ def login():
 
     log_audit(email, status='success', user_id=user.id)
     logger.info(f"{log_context()} Login: {email} (plan={user.plan})")
+    # Send admin login alert (non-blocking)
+    _login_ip         = request.headers.get('X-Forwarded-For', request.remote_addr or 'unknown').split(',')[0].strip()
+    _login_user_agent = request.headers.get('User-Agent', 'unknown')
+    _admin_email      = os.getenv('ADMIN_EMAIL') or os.getenv('SMTP_USER')
+    if _admin_email:
+        _executor.submit(_send_login_alert, _admin_email, email, _login_ip, _login_user_agent)
     return jsonify({
         'success':       True,
         'access_token':  access_token,
