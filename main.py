@@ -722,7 +722,7 @@ def verify_direct():
 
 
 @v1.route('/auth/login', methods=['POST'])
-@limiter.limit("20 per hour")
+@limiter.limit("10 per minute", key_func=lambda: (request.get_json(silent=True) or {}).get('email', get_remote_address()))
 def login():
     data     = request.get_json() or {}
     email    = data.get('email', '').lower().strip()
