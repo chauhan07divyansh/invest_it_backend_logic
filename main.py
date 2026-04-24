@@ -60,14 +60,19 @@ db = SQLAlchemy(app)
 
 class User(db.Model):
     __tablename__ = 'users'
-    id            = db.Column(db.Integer, primary_key=True)
-    email         = db.Column(db.String(255), unique=True, nullable=False, index=True)
-    password_hash = db.Column(db.String(512), nullable=False)
-    plan          = db.Column(db.String(20), nullable=False, default='FREE')
-    is_verified   = db.Column(db.Boolean, nullable=False, default=False)
-    verify_token  = db.Column(db.String(64), nullable=True)
-    created_at    = db.Column(db.DateTime, default=datetime.utcnow)
-    usages        = db.relationship('UserUsage', backref='user', lazy=True)
+    id                   = db.Column(db.Integer, primary_key=True)
+    email                = db.Column(db.String(255), unique=True, nullable=False, index=True)
+    password_hash        = db.Column(db.String(512), nullable=False)
+    plan                 = db.Column(db.String(20), nullable=False, default='FREE')
+    is_verified          = db.Column(db.Boolean, nullable=False, default=False)
+    verify_token         = db.Column(db.String(64), nullable=True)
+    # ── Account lockout (ported from Node.js auth) ────────────────────────────
+    failed_login_attempts = db.Column(db.Integer, nullable=False, default=0)
+    locked_until         = db.Column(db.DateTime, nullable=True)
+    is_active            = db.Column(db.Boolean, nullable=False, default=True)
+    created_at           = db.Column(db.DateTime, default=datetime.utcnow)
+    usages               = db.relationship('UserUsage', backref='user', lazy=True)
+    audit_logs           = db.relationship('LoginAudit', backref='user', lazy=True)
 
 
 class UserUsage(db.Model):
@@ -80,6 +85,19 @@ class UserUsage(db.Model):
     response_ms    = db.Column(db.Integer, nullable=True)
     cache_hit      = db.Column(db.Boolean, nullable=False, default=False)
     timestamp      = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+
+
+# ── Login audit log (ported from Node.js auth) ────────────────────────────────
+class LoginAudit(db.Model):
+    __tablename__ = 'login_audit'
+    id             = db.Column(db.Integer, primary_key=True)
+    user_id        = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    email          = db.Column(db.String(255), nullable=False)
+    ip_address     = db.Column(db.String(64), nullable=True)
+    user_agent     = db.Column(db.Text, nullable=True)
+    status         = db.Column(db.String(20), nullable=False)   # success | failed | locked
+    failure_reason = db.Column(db.String(100), nullable=True)
+    created_at     = db.Column(db.DateTime, default=datetime.utcnow, index=True)
 
 
 with app.app_context():
@@ -129,6 +147,10 @@ PLAN_LIMITS = {
     'ENTERPRISE': {'analyze': True,  'portfolio': True,  'compare': True,  'daily_calls': 999999, 'portfolio_per_day': 999},
 }
 
+# ── Account lockout config ────────────────────────────────────────────────────
+MAX_FAILED_ATTEMPTS     = 5
+LOCKOUT_DURATION_MINUTES = 15
+
 # ── Redis cache ───────────────────────────────────────────────────────────────
 CACHE_TIMEOUT  = 300
 PRECOMPUTE_TTL = 86400
@@ -169,6 +191,32 @@ def set_cache(key: str, value, ttl: int = CACHE_TIMEOUT):
         except Exception as e:
             logger.warning(f"Redis SET '{key}': {e}")
     simple_cache[key] = (value, datetime.now().timestamp())
+
+
+# ── Token blacklist helpers (ported from Node.js auth) ────────────────────────
+BLACKLIST_PREFIX = "blacklist:token:"
+BLACKLIST_TTL    = 15 * 60  # matches JWT access token lifetime (15 min)
+
+def blacklist_token(token: str):
+    """Add an access token to the blacklist so it can't be reused after logout."""
+    if redis_client:
+        try:
+            redis_client.setex(f"{BLACKLIST_PREFIX}{token}", BLACKLIST_TTL, "1")
+        except Exception as e:
+            logger.warning(f"Token blacklist SET failed: {e}")
+    else:
+        # In-memory fallback (single instance only)
+        set_cache(f"{BLACKLIST_PREFIX}{token}", "1", BLACKLIST_TTL)
+
+def is_token_blacklisted(token: str) -> bool:
+    """Returns True if the token has been blacklisted (user logged out)."""
+    if redis_client:
+        try:
+            return bool(redis_client.exists(f"{BLACKLIST_PREFIX}{token}"))
+        except Exception as e:
+            logger.warning(f"Token blacklist GET failed: {e}")
+            return False
+    return get_from_cache(f"{BLACKLIST_PREFIX}{token}") is not None
 
 
 _executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
@@ -212,6 +260,50 @@ def password_needs_rehash(hashed: str) -> bool:
     if PASSLIB_AVAILABLE:
         return pwd_context.needs_update(hashed)
     return False
+
+
+# ── Account lockout helpers (ported from Node.js auth) ───────────────────────
+
+def is_account_locked(user) -> bool:
+    if not user.locked_until:
+        return False
+    return user.locked_until > datetime.utcnow()
+
+def record_failed_attempt(user):
+    """Increment failed attempts and lock account if threshold reached."""
+    user.failed_login_attempts += 1
+    if user.failed_login_attempts >= MAX_FAILED_ATTEMPTS:
+        user.locked_until = datetime.utcnow() + timedelta(minutes=LOCKOUT_DURATION_MINUTES)
+        logger.warning(f"Account locked: {user.email} — {user.failed_login_attempts} failed attempts")
+    db.session.commit()
+    return user.failed_login_attempts
+
+def reset_failed_attempts(user):
+    """Reset lockout state after successful login."""
+    user.failed_login_attempts = 0
+    user.locked_until = None
+    db.session.commit()
+
+
+# ── Audit log helper (ported from Node.js auth) ───────────────────────────────
+
+def log_audit(email, status, failure_reason=None, user_id=None):
+    """Record every login attempt — success or failure."""
+    try:
+        ip         = request.headers.get('X-Forwarded-For', request.remote_addr or 'unknown').split(',')[0].strip()
+        user_agent = request.headers.get('User-Agent', 'unknown')
+        entry = LoginAudit(
+            user_id        = user_id,
+            email          = email,
+            ip_address     = ip,
+            user_agent     = user_agent,
+            status         = status,
+            failure_reason = failure_reason,
+        )
+        db.session.add(entry)
+        db.session.commit()
+    except Exception as e:
+        logger.warning(f"Audit log failed: {e}")
 
 
 # ── Email verification helpers ────────────────────────────────────────────────
@@ -323,6 +415,11 @@ def token_required(f):
                 return jsonify({'success': False, 'error': 'Malformed authorization header'}), 401
         if not token:
             return jsonify({'success': False, 'error': 'Token is missing'}), 401
+
+        # AUTH: Check blacklist first (handles logout-before-expiry)
+        if is_token_blacklisted(token):
+            return jsonify({'success': False, 'error': 'Token has been revoked. Please log in again.'}), 401
+
         try:
             payload = decode_token(token)
             if payload.get('type') == 'refresh':
@@ -733,14 +830,53 @@ def login():
         return jsonify({'success': False, 'error': 'Server misconfigured'}), 500
 
     user = User.query.filter_by(email=email).first()
-    if not user or not verify_password(password, user.password_hash):
+
+    # AUTH: User not found — same error as wrong password (prevent email enumeration)
+    if not user:
+        log_audit(email, status='failed', failure_reason='user_not_found')
         return jsonify({'success': False, 'error': 'Invalid credentials'}), 401
 
+    # AUTH: Account locked?
+    if is_account_locked(user):
+        minutes_left = int((user.locked_until - datetime.utcnow()).total_seconds() / 60) + 1
+        log_audit(email, status='locked', failure_reason='account_locked', user_id=user.id)
+        logger.warning(f"{log_context()} Login blocked — account locked: {email}")
+        return jsonify({
+            'success': False,
+            'error':   f'Account temporarily locked due to too many failed attempts. '
+                       f'Try again in {minutes_left} minute(s).',
+            'code':    'ACCOUNT_LOCKED',
+            'locked_until': user.locked_until.isoformat(),
+        }), 423
+
+    # AUTH: Account disabled?
+    if not user.is_active:
+        log_audit(email, status='failed', failure_reason='account_disabled', user_id=user.id)
+        return jsonify({'success': False, 'error': 'Account is disabled. Please contact support.'}), 403
+
+    # AUTH: Wrong password?
+    if not verify_password(password, user.password_hash):
+        attempts = record_failed_attempt(user)
+        remaining = max(0, MAX_FAILED_ATTEMPTS - attempts)
+        log_audit(email, status='failed', failure_reason='wrong_password', user_id=user.id)
+        logger.warning(f"{log_context()} Failed login: {email} — attempt {attempts}/{MAX_FAILED_ATTEMPTS}")
+        return jsonify({
+            'success': False,
+            'error':   f'Invalid credentials. {remaining} attempt(s) remaining before lockout.'
+                       if remaining > 0 else 'Account locked due to too many failed attempts.',
+            'attempts_remaining': remaining,
+        }), 401
+
+    # AUTH: Email not verified?
     if not user.is_verified:
+        log_audit(email, status='failed', failure_reason='email_not_verified', user_id=user.id)
         return jsonify({
             'success': False,
             'error':   'Please verify your email before logging in.'
         }), 403
+
+    # ✅ Login success
+    reset_failed_attempts(user)
 
     if password_needs_rehash(user.password_hash):
         user.password_hash = hash_password(password)
@@ -759,6 +895,7 @@ def login():
                                  'exp': datetime.utcnow() + timedelta(days=30)},
                                 secret, algorithm="HS256")
 
+    log_audit(email, status='success', user_id=user.id)
     logger.info(f"{log_context()} Login: {email} (plan={user.plan})")
     return jsonify({
         'success':       True,
@@ -795,6 +932,23 @@ def refresh_token_endpoint():
         return jsonify({'success': False, 'error': 'Refresh token expired. Please log in again.'}), 401
     except jwt.InvalidTokenError:
         return jsonify({'success': False, 'error': 'Invalid refresh token'}), 401
+
+
+@v1.route('/auth/logout', methods=['POST'])
+@token_required
+def logout():
+    """
+    AUTH: Blacklist the current access token so it can't be reused.
+    Client must also delete tokens from storage.
+    """
+    try:
+        raw_token = request.headers['Authorization'].split(" ")[1]
+        blacklist_token(raw_token)
+        logger.info(f"{log_context()} Logout: {g.user_email}")
+        return jsonify({'success': True, 'message': 'Logged out successfully'})
+    except Exception as e:
+        logger.error(f"Logout error: {e}")
+        return jsonify({'success': False, 'error': 'Logout failed'}), 500
 
 
 # ── Trading endpoints ─────────────────────────────────────────────────────────
@@ -993,6 +1147,27 @@ def usage_stats():
         'total_cost':      round(r.total_cost or 0, 2),
         'avg_response_ms': round(r.avg_ms or 0, 1),
         'cache_hit_rate':  round((r.cache_hits or 0) / r.calls * 100, 1),
+    } for r in rows]
+    return jsonify({'success': True, 'data': data, 'period_days': since_days})
+
+
+@v1.route('/admin/audit', methods=['GET'])
+@token_required
+def audit_log():
+    """AUTH: View recent login audit entries. Token required."""
+    since_days = int(request.args.get('days', 1))
+    since      = datetime.utcnow() - timedelta(days=since_days)
+    rows = (db.session.query(LoginAudit)
+            .filter(LoginAudit.created_at >= since)
+            .order_by(LoginAudit.created_at.desc())
+            .limit(200)
+            .all())
+    data = [{
+        'email':          r.email,
+        'status':         r.status,
+        'failure_reason': r.failure_reason,
+        'ip_address':     r.ip_address,
+        'created_at':     r.created_at.isoformat(),
     } for r in rows]
     return jsonify({'success': True, 'data': data, 'period_days': since_days})
 
