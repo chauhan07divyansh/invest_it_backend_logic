@@ -268,7 +268,8 @@ def track_usage_and_disclaimer(response):
             data = response.get_json()
             if isinstance(data, dict) and 'disclaimer' not in data:
                 data['disclaimer'] = SEBI_DISCLAIMER
-                response.data = jsonify(data).data
+                response.set_data(json.dumps(data))
+                response.content_type = 'application/json'
         except Exception:
             pass
 
