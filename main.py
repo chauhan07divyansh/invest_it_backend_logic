@@ -813,8 +813,18 @@ def register():
         return jsonify({'success': False, 'error': 'Email and password required'}), 400
     if len(password) < 8:
         return jsonify({'success': False, 'error': 'Password must be at least 8 characters'}), 400
-    if User.query.filter_by(email=email).first():
-        return jsonify({'success': False, 'error': 'User already exists'}), 409
+    existing = User.query.filter_by(email=email).first()
+    if existing:
+        if existing.is_verified:
+            return jsonify({'success': False, 'error': 'User already exists'}), 409
+        # Unverified account — resend verification with a fresh token
+        existing.verify_token = uuid.uuid4().hex
+        db.session.commit()
+        _executor.submit(_send_verification_email, email, existing.verify_token)
+        return jsonify({
+            'success': True,
+            'message': 'Registered successfully. Please check your email to verify your account.'
+        }), 201
 
     hashed       = hash_password(password)
     verify_token = uuid.uuid4().hex
@@ -1001,6 +1011,47 @@ def logout():
     except Exception as e:
         logger.error(f"Logout error: {e}")
         return jsonify({'success': False, 'error': 'Logout failed'}), 500
+
+
+@v1.route('/auth/usage', methods=['GET'])
+@token_required
+def get_usage():
+    """Returns today's real usage from DB for the authenticated user."""
+    try:
+        today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+
+        # Total API calls today (excluding cache hits)
+        total_calls = db.session.query(UserUsage).filter(
+            UserUsage.user_id   == g.user_id,
+            UserUsage.timestamp >= today_start,
+            UserUsage.cache_hit == False
+        ).count()
+
+        # Portfolio calls today
+        portfolio_calls = db.session.query(UserUsage).filter(
+            UserUsage.user_id   == g.user_id,
+            UserUsage.endpoint.like('%/portfolio/%'),
+            UserUsage.timestamp >= today_start,
+            UserUsage.cache_hit == False
+        ).count()
+
+        plan   = g.user_plan
+        limits = PLAN_LIMITS.get(plan, PLAN_LIMITS['FREE'])
+
+        return jsonify({
+            'success': True,
+            'data': {
+                'plan':                  plan,
+                'daily_api_calls_used':  total_calls,
+                'daily_api_calls_limit': limits['daily_calls'],
+                'portfolios_used_today': portfolio_calls,
+                'portfolio_limit':       limits['portfolio_per_day'],
+                'reset_at':              'midnight UTC',
+            }
+        })
+    except Exception as e:
+        logger.error(f"{log_context()} usage endpoint error: {e}")
+        return jsonify({'success': False, 'error': 'Could not fetch usage'}), 500
 
 
 # ── Trading endpoints ─────────────────────────────────────────────────────────
