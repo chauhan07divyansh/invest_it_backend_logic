@@ -1341,9 +1341,11 @@ app.register_blueprint(v1)
 def legacy_stocks():         return get_all_stocks()
 
 @app.route('/api/analyze/swing/<symbol>',    methods=['GET'])
+@token_required
 def legacy_swing(symbol):    return analyze_stock('swing', symbol)
 
 @app.route('/api/analyze/position/<symbol>', methods=['GET'])
+@token_required
 def legacy_position(symbol): return analyze_stock('position', symbol)
 
 @app.route('/api/health',                    methods=['GET'])
