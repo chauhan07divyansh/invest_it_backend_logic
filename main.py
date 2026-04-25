@@ -547,6 +547,38 @@ def check_portfolio_daily_limit(f):
     return decorated
 
 
+def check_daily_api_limit(f):
+    """Blocks requests when the user has exceeded their daily API call limit."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        user_id = getattr(g, 'user_id', None)
+        plan    = getattr(g, 'user_plan', 'FREE')
+        limit   = PLAN_LIMITS.get(plan, PLAN_LIMITS['FREE']).get('daily_calls', 10)
+
+        if limit < 999999 and user_id:
+            try:
+                today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+                count = db.session.query(UserUsage).filter(
+                    UserUsage.user_id   == user_id,
+                    UserUsage.timestamp >= today_start,
+                    UserUsage.cache_hit == False
+                ).count()
+
+                if count >= limit:
+                    return jsonify({
+                        'success': False,
+                        'error':   f'{plan} plan allows {limit} API calls per day. '
+                                   f'You have used {count}/{limit} today. '
+                                   f'Upgrade to PRO at sentiquant.org/pricing for 500 calls/day.',
+                        'code':    'DAILY_LIMIT_EXCEEDED',
+                    }), 429
+            except Exception as e:
+                logger.warning(f"{log_context()} Daily limit check failed: {e}")
+
+        return f(*args, **kwargs)
+    return decorated
+
+
 # ── Validation helpers ────────────────────────────────────────────────────────
 
 NSE_SYMBOLS = set()
@@ -1107,6 +1139,8 @@ def analyze_stock(system_type: str, symbol: str):
 
 
 @v1.route('/analyze/swing/<symbol>', methods=['GET'])
+@token_required
+@check_daily_api_limit
 @require_systems
 @limiter.limit("10 per minute")
 def analyze_swing_stock_endpoint(symbol):
@@ -1114,6 +1148,8 @@ def analyze_swing_stock_endpoint(symbol):
 
 
 @v1.route('/analyze/position/<symbol>', methods=['GET'])
+@token_required
+@check_daily_api_limit
 @require_systems
 @limiter.limit("10 per minute")
 def analyze_position_stock_endpoint(symbol):
