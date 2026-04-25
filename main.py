@@ -1107,6 +1107,28 @@ def analyze_stock(system_type: str, symbol: str):
         symbol = validate_symbol(symbol)
         g.current_symbol = symbol
 
+        # AUTH: Check daily limit before serving even cached results.
+        # Cached responses are still counted against the user's quota.
+        user_id = getattr(g, 'user_id', None)
+        plan    = getattr(g, 'user_plan', 'FREE')
+        limit   = PLAN_LIMITS.get(plan, PLAN_LIMITS['FREE']).get('daily_calls', 10)
+
+        if limit < 999999 and user_id:
+            today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+            count = db.session.query(UserUsage).filter(
+                UserUsage.user_id   == user_id,
+                UserUsage.timestamp >= today_start,
+                UserUsage.cache_hit == False
+            ).count()
+            if count >= limit:
+                return jsonify({
+                    'success': False,
+                    'error':   f'{plan} plan allows {limit} API calls per day. '
+                               f'You have used {count}/{limit} today. '
+                               f'Upgrade to PRO at sentiquant.org/pricing for 500 calls/day.',
+                    'code':    'DAILY_LIMIT_EXCEEDED',
+                }), 429
+
         precomputed = get_precomputed(system_type, symbol)
         if precomputed:
             g.cache_hit = True
