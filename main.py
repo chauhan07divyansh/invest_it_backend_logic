@@ -411,7 +411,8 @@ def track_usage_and_disclaimer(response):
         except Exception:
             pass
 
-    if request.path.startswith('/api/') and request.method in ('GET', 'POST'):
+    TRACKED_PATHS = ('/analyze/', '/portfolio/', '/compare/')
+    if any(p in request.path for p in TRACKED_PATHS) and request.method in ('GET', 'POST'):
         try:
             elapsed_ms = int((datetime.now() - g.request_start).total_seconds() * 1000) \
                          if hasattr(g, 'request_start') else None
