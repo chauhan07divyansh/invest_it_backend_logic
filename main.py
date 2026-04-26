@@ -1053,11 +1053,16 @@ def get_usage():
     try:
         today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
 
-        # Total API calls today (excluding cache hits)
+        # Total trading API calls today (analyze + portfolio + compare, excluding cache hits)
         total_calls = db.session.query(UserUsage).filter(
             UserUsage.user_id   == g.user_id,
             UserUsage.timestamp >= today_start,
-            UserUsage.cache_hit == False
+            UserUsage.cache_hit == False,
+            db.or_(
+                UserUsage.endpoint.like('%/analyze/%'),
+                UserUsage.endpoint.like('%/portfolio/%'),
+                UserUsage.endpoint.like('%/compare/%'),
+            )
         ).count()
 
         # Portfolio calls today
@@ -1119,7 +1124,12 @@ def analyze_stock(system_type: str, symbol: str):
             count = db.session.query(UserUsage).filter(
                 UserUsage.user_id   == user_id,
                 UserUsage.timestamp >= today_start,
-                UserUsage.cache_hit == False
+                UserUsage.cache_hit == False,
+                db.or_(
+                    UserUsage.endpoint.like('%/analyze/%'),
+                    UserUsage.endpoint.like('%/portfolio/%'),
+                    UserUsage.endpoint.like('%/compare/%'),
+                )
             ).count()
             if count >= limit:
                 return jsonify({
