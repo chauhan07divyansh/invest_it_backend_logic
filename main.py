@@ -1094,6 +1094,129 @@ def get_usage():
 
 # ── Trading endpoints ─────────────────────────────────────────────────────────
 
+# ── Portfolio job store ───────────────────────────────────────────────────────
+# Jobs are stored in Redis (production) or in-memory dict (fallback).
+# Each job: { status, progress, result, error, created_at }
+
+JOB_TTL = 3600  # jobs expire after 1 hour
+
+def _job_key(job_id: str) -> str:
+    return f"portfolio_job:{job_id}"
+
+def _set_job(job_id: str, data: dict):
+    if redis_client:
+        try:
+            redis_client.setex(_job_key(job_id), JOB_TTL, json.dumps(data))
+            return
+        except Exception as e:
+            logger.warning(f"Redis job SET failed: {e}")
+    set_cache(_job_key(job_id), data, JOB_TTL)
+
+def _get_job(job_id: str) -> dict | None:
+    if redis_client:
+        try:
+            val = redis_client.get(_job_key(job_id))
+            return json.loads(val) if val else None
+        except Exception as e:
+            logger.warning(f"Redis job GET failed: {e}")
+    return get_from_cache(_job_key(job_id))
+
+def _run_swing_job(job_id: str, budget: float, risk: str, user_id: int, plan: str):
+    """Background thread: run swing portfolio and store result."""
+    try:
+        _set_job(job_id, {'status': 'processing', 'progress': 5, 'result': None, 'error': None})
+        result = trading_api.generate_swing_portfolio(budget, risk)
+        _set_job(job_id, {'status': 'complete', 'progress': 100, 'result': result, 'error': None})
+        # Track usage
+        with app.app_context():
+            try:
+                usage = UserUsage(user_id=user_id, endpoint='/api/v1/portfolio/swing',
+                                  cost_estimate=2.0, cache_hit=False)
+                db.session.add(usage)
+                db.session.commit()
+            except Exception as e:
+                logger.warning(f"Usage tracking failed for job {job_id}: {e}")
+    except Exception as e:
+        logger.error(f"Portfolio job {job_id} failed: {e}")
+        _set_job(job_id, {'status': 'failed', 'progress': 0, 'result': None, 'error': str(e)})
+
+def _run_position_job(job_id: str, budget: float, risk: str, time_period: int, user_id: int, plan: str):
+    """Background thread: run position portfolio and store result."""
+    try:
+        _set_job(job_id, {'status': 'processing', 'progress': 5, 'result': None, 'error': None})
+        result = trading_api.generate_position_portfolio(budget, risk, time_period)
+        _set_job(job_id, {'status': 'complete', 'progress': 100, 'result': result, 'error': None})
+        with app.app_context():
+            try:
+                usage = UserUsage(user_id=user_id, endpoint='/api/v1/portfolio/position',
+                                  cost_estimate=2.0, cache_hit=False)
+                db.session.add(usage)
+                db.session.commit()
+            except Exception as e:
+                logger.warning(f"Usage tracking failed for job {job_id}: {e}")
+    except Exception as e:
+        logger.error(f"Portfolio job {job_id} failed: {e}")
+        _set_job(job_id, {'status': 'failed', 'progress': 0, 'result': None, 'error': str(e)})
+
+@v1.route('/portfolio/swing/start', methods=['POST'])
+@token_required
+@plan_required('portfolio')
+@check_portfolio_daily_limit
+@require_systems
+@limiter.limit("5 per minute")
+def start_swing_portfolio():
+    """Start a portfolio generation job and return job_id immediately."""
+    try:
+        data   = request.get_json() or {}
+        budget = validate_budget(data.get('budget'))
+        risk   = validate_risk_appetite(data.get('risk_appetite'))
+        job_id = uuid.uuid4().hex
+        _set_job(job_id, {'status': 'queued', 'progress': 0, 'result': None, 'error': None})
+        _executor.submit(_run_swing_job, job_id, budget, risk, g.user_id, g.user_plan)
+        logger.info(f"{log_context()} Started swing portfolio job {job_id}")
+        return jsonify({'success': True, 'job_id': job_id})
+    except (ValueError, KeyError) as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
+    except Exception as e:
+        logger.error(f"{log_context()} portfolio/swing/start: {e}")
+        return jsonify({'success': False, 'error': 'Internal server error'}), 500
+
+@v1.route('/portfolio/position/start', methods=['POST'])
+@token_required
+@plan_required('portfolio')
+@check_portfolio_daily_limit
+@require_systems
+@limiter.limit("5 per minute")
+def start_position_portfolio():
+    """Start a position portfolio generation job and return job_id immediately."""
+    try:
+        data        = request.get_json() or {}
+        budget      = validate_budget(data.get('budget'))
+        risk        = validate_risk_appetite(data.get('risk_appetite'))
+        time_period = validate_time_period(data.get('time_period'))
+        job_id = uuid.uuid4().hex
+        _set_job(job_id, {'status': 'queued', 'progress': 0, 'result': None, 'error': None})
+        _executor.submit(_run_position_job, job_id, budget, risk, time_period, g.user_id, g.user_plan)
+        logger.info(f"{log_context()} Started position portfolio job {job_id}")
+        return jsonify({'success': True, 'job_id': job_id})
+    except (ValueError, KeyError) as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
+    except Exception as e:
+        logger.error(f"{log_context()} portfolio/position/start: {e}")
+        return jsonify({'success': False, 'error': 'Internal server error'}), 500
+
+@v1.route('/portfolio/job/<job_id>', methods=['GET'])
+@token_required
+@limiter.limit("30 per minute")
+def get_portfolio_job(job_id: str):
+    """Poll job status. Returns status, progress (0-100), and result when complete."""
+    job = _get_job(job_id)
+    if not job:
+        return jsonify({'success': False, 'error': 'Job not found or expired'}), 404
+    return jsonify({'success': True, 'data': job})
+
+
+
 @v1.route('/stocks', methods=['GET'])
 def get_all_stocks():
     cache_key = "all_stocks"
