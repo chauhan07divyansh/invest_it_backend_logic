@@ -1416,6 +1416,72 @@ def health_check():
     return jsonify({'success': True, 'status': 'alive'}), 200
 
 
+@v1.route('/contact', methods=['POST'])
+@limiter.limit("5 per hour")
+def contact():
+    """Contact form — sends email to admin via Zoho SMTP."""
+    data    = request.get_json() or {}
+    name    = data.get('name', '').strip()
+    email   = data.get('email', '').strip()
+    subject = data.get('subject', '').strip()
+    message = data.get('message', '').strip()
+
+    if not all([name, email, subject, message]):
+        return jsonify({'success': False, 'error': 'Missing required fields'}), 400
+    if len(message) < 20:
+        return jsonify({'success': False, 'error': 'Message too short'}), 400
+
+    smtp_host = os.getenv("SMTP_HOST")
+    if not smtp_host:
+        logger.warning("Contact form submitted but SMTP not configured")
+        return jsonify({'success': False, 'error': 'service_unavailable'}), 503
+
+    try:
+        recipient = os.getenv("ADMIN_EMAIL") or os.getenv("SMTP_USER")
+        html_body = f"""
+        <div style="font-family:sans-serif;max-width:600px;margin:0 auto;background:#0f1117;color:#fff;border-radius:12px;overflow:hidden">
+          <div style="padding:24px 32px;border-bottom:1px solid #1e2130">
+            <span style="font-size:20px;font-weight:bold">⚡ SentiQuant</span>
+            <p style="color:#8b8fa8;margin:4px 0 0;font-size:13px">Contact Form Submission</p>
+          </div>
+          <div style="padding:32px">
+            <table style="width:100%;border-collapse:collapse">
+              <tr><td style="color:#8b8fa8;padding:8px 0;width:120px;font-size:13px">Name</td><td style="color:#fff;font-size:13px">{name}</td></tr>
+              <tr><td style="color:#8b8fa8;padding:8px 0;font-size:13px">Email</td><td style="font-size:13px"><a href="mailto:{email}" style="color:#06b6d4">{email}</a></td></tr>
+              <tr><td style="color:#8b8fa8;padding:8px 0;font-size:13px">Subject</td><td style="color:#fff;font-size:13px">{subject}</td></tr>
+            </table>
+            <div style="margin-top:24px;padding:16px;background:#1e2130;border-radius:8px">
+              <p style="color:#8b8fa8;font-size:11px;margin:0 0 8px;text-transform:uppercase;letter-spacing:0.05em">Message</p>
+              <p style="color:#fff;font-size:14px;line-height:1.6;margin:0;white-space:pre-wrap">{message}</p>
+            </div>
+          </div>
+          <div style="padding:16px 32px;border-top:1px solid #1e2130;text-align:center">
+            <p style="color:#8b8fa8;font-size:12px;margin:0">SentiQuant — AI Stock Analysis Platform</p>
+          </div>
+        </div>
+        """
+        from email.mime.multipart import MIMEMultipart
+        from email.mime.text import MIMEText as _MIMEText
+        msg = MIMEMultipart('alternative')
+        msg['Subject']  = f"[Contact] {subject} — from {name}"
+        msg['From']     = os.getenv("SMTP_USER")
+        msg['To']       = recipient
+        msg['Reply-To'] = email
+        msg.attach(_MIMEText(f"Name: {name}\nEmail: {email}\nSubject: {subject}\n\nMessage:\n{message}", 'plain'))
+        msg.attach(_MIMEText(html_body, 'html'))
+
+        with smtplib.SMTP(smtp_host, int(os.getenv("SMTP_PORT", 587))) as server:
+            server.starttls()
+            server.login(os.getenv("SMTP_USER"), os.getenv("SMTP_PASS"))
+            server.sendmail(msg['From'], [recipient], msg.as_string())
+
+        logger.info(f"Contact form email sent from {email} ({name})")
+        return jsonify({'success': True})
+    except Exception as e:
+        logger.error(f"Contact form email failed: {e}")
+        return jsonify({'success': False, 'error': 'Failed to send message'}), 500
+
+
 @v1.route('/disclaimer', methods=['GET'])
 def get_disclaimer():
     return jsonify({'success': True, 'data': SEBI_DISCLAIMER})
