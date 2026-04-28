@@ -648,7 +648,7 @@ class TradingAPI:
             redis_url=os.getenv("REDIS_URL", None)
         )
         try:
-            self.swing_system = EnhancedSwingTradingSystem(data_provider=data_provider)
+            self.swing_system = EnhancedSwingTradingSystem(data_provider=data_provider, redis_client=redis_client)
             logger.info("✅ SwingTradingSystem ready.")
         except Exception:
             logger.critical("❌ SwingTradingSystem init failed", exc_info=True)
