@@ -72,7 +72,7 @@ class EnhancedSwingTradingSystem:
             self.cache_ttl = {
                 'ohlcv': 3600,
                 'analysis': 900,
-                'news': 1800,
+                'news': 86400,   # 24h — news cached per stock per day to save Event Registry tokens
                 'batch_analysis': 900
             }
 
