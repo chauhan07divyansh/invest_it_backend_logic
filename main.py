@@ -411,8 +411,13 @@ def track_usage_and_disclaimer(response):
         except Exception:
             pass
 
-    TRACKED_PATHS = ('/analyze/', '/portfolio/', '/compare/')
-    if any(p in request.path for p in TRACKED_PATHS) and request.method in ('GET', 'POST'):
+    # Track only real user-facing API calls — not internal portfolio analysis or job polling.
+    # Portfolio start endpoints are tracked inside _run_swing_job/_run_position_job directly.
+    TRACKED_PATHS   = ('/analyze/', '/compare/')
+    EXCLUDED_PATHS  = ('/portfolio/job/', '/portfolio/swing/start', '/portfolio/position/start')
+    is_tracked      = any(p in request.path for p in TRACKED_PATHS)
+    is_excluded     = any(p in request.path for p in EXCLUDED_PATHS)
+    if is_tracked and not is_excluded and request.method in ('GET', 'POST'):
         try:
             elapsed_ms = int((datetime.now() - g.request_start).total_seconds() * 1000) \
                          if hasattr(g, 'request_start') else None
@@ -648,7 +653,7 @@ class TradingAPI:
             redis_url=os.getenv("REDIS_URL", None)
         )
         try:
-            self.swing_system = EnhancedSwingTradingSystem(data_provider=data_provider, redis_client=redis_client)
+            self.swing_system = EnhancedSwingTradingSystem(data_provider=data_provider)
             logger.info("✅ SwingTradingSystem ready.")
         except Exception:
             logger.critical("❌ SwingTradingSystem init failed", exc_info=True)
@@ -1060,7 +1065,6 @@ def get_usage():
             UserUsage.cache_hit == False,
             db.or_(
                 UserUsage.endpoint.like('%/analyze/%'),
-                UserUsage.endpoint.like('%/portfolio/%'),
                 UserUsage.endpoint.like('%/compare/%'),
             )
         ).count()
