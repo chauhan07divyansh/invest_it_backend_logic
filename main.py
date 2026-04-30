@@ -125,19 +125,18 @@ CORS(app, resources={r"/api/*": {"origins": ALLOWED_ORIGINS}}, supports_credenti
 # ── SEBI Disclaimer ───────────────────────────────────────────────────────────
 SEBI_DISCLAIMER = {
     "text": (
-        "The information, analysis, scores, recommendations, and signals provided by this application "
-        "are generated algorithmically for informational and educational purposes only. They do NOT constitute "
-        "investment advice, financial advice, portfolio management services, or research analysis as defined under "
-        "SEBI regulations. We are NOT registered with SEBI as an Investment Adviser, Research Analyst, Portfolio "
-        "Manager, or Stock Broker. Users must NOT rely solely on this information for making investment decisions. "
-        "Stock market investments are subject to market risks, including the potential loss of principal. Users are "
-        "strongly advised to conduct independent research and consult a SEBI-registered Investment Adviser or financial "
-        "professional before making any investment decisions. Past performance is not indicative of future results. "
-        "The application and its creators assume no liability for any financial losses incurred based on the use of "
-        "this information."
+        "IMPORTANT: This platform provides AI-generated technical analysis for educational and informational purposes ONLY. "
+        "Sentiquant is NOT registered with SEBI as an Investment Adviser, Research Analyst, Portfolio Manager, or Stock Broker. "
+        "Nothing on this platform constitutes investment advice, a recommendation to buy or sell securities, portfolio management "
+        "services, or research analysis as defined under SEBI (Investment Advisers) Regulations, 2013 or SEBI (Research Analysts) "
+        "Regulations, 2014. All signals, scores, and technical reference levels shown are algorithmic outputs for informational "
+        "purposes only and must NOT be construed as buy/sell recommendations. Stock market investments are subject to market risks "
+        "including the potential loss of principal. Users are strongly advised to conduct independent due diligence and consult a "
+        "SEBI-registered Investment Adviser before making any investment decisions. Past performance is not indicative of future results. "
+        "The platform and its creators assume no liability for any financial losses incurred based on the use of this information."
     ),
-    "version": "1.0",
-    "last_updated": "2024-11-19"
+    "version": "2.0",
+    "last_updated": "2026-04-30"
 }
 
 # ── Plan limits ───────────────────────────────────────────────────────────────
@@ -411,13 +410,8 @@ def track_usage_and_disclaimer(response):
         except Exception:
             pass
 
-    # Track only real user-facing API calls — not internal portfolio analysis or job polling.
-    # Portfolio start endpoints are tracked inside _run_swing_job/_run_position_job directly.
-    TRACKED_PATHS   = ('/analyze/', '/compare/')
-    EXCLUDED_PATHS  = ('/portfolio/job/', '/portfolio/swing/start', '/portfolio/position/start')
-    is_tracked      = any(p in request.path for p in TRACKED_PATHS)
-    is_excluded     = any(p in request.path for p in EXCLUDED_PATHS)
-    if is_tracked and not is_excluded and request.method in ('GET', 'POST'):
+    TRACKED_PATHS = ('/analyze/', '/portfolio/', '/compare/')
+    if any(p in request.path for p in TRACKED_PATHS) and request.method in ('GET', 'POST'):
         try:
             elapsed_ms = int((datetime.now() - g.request_start).total_seconds() * 1000) \
                          if hasattr(g, 'request_start') else None
@@ -653,7 +647,7 @@ class TradingAPI:
             redis_url=os.getenv("REDIS_URL", None)
         )
         try:
-            self.swing_system = EnhancedSwingTradingSystem(data_provider=data_provider)
+            self.swing_system = EnhancedSwingTradingSystem(data_provider=data_provider, redis_client=redis_client)
             logger.info("✅ SwingTradingSystem ready.")
         except Exception:
             logger.critical("❌ SwingTradingSystem init failed", exc_info=True)
@@ -702,7 +696,7 @@ class TradingAPI:
             mgmt_note      = backend_plan.get('trade_management_note', '')
             current_price  = result.get('current_price', 0)
             return {
-                'signal':               entry_signal,
+                'signal':               self._normalize_signal(entry_signal),
                 'strategy':             self._enhance_strategy_description(entry_strategy, entry_signal, system_type),
                 'entry_price':          f"Around {current_price:.2f}" if current_price > 0 else 'N/A',
                 'stop_loss':            f"{stop_loss:.2f}" if isinstance(stop_loss, (int, float)) and stop_loss > 0 else 'N/A',
@@ -715,16 +709,27 @@ class TradingAPI:
             logger.error(f"{log_context()} Error generating trading plan: {e}")
             return self._fallback_trading_plan(result)
 
+    def _normalize_signal(self, signal: str) -> str:
+        """Map raw BUY/SELL/HOLD signals to SEBI-compliant neutral terms."""
+        s = signal.upper().strip()
+        if 'STRONG BUY' in s or 'STRONG_BUY' in s: return 'STRONG BULLISH'
+        if 'BUY' in s:    return 'BULLISH'
+        if 'STRONG SELL' in s or 'STRONG_SELL' in s: return 'STRONG BEARISH'
+        if 'SELL' in s:   return 'BEARISH'
+        if 'HOLD' in s or 'WATCH' in s: return 'NEUTRAL'
+        if 'AVOID' in s:  return 'CAUTIOUS'
+        return signal  # pass through if already compliant
+
     def _enhance_strategy_description(self, base_strategy, signal, system_type):
         s = signal.lower()
-        if "strong buy" in s:
-            return f"A high-conviction BUY signal for {system_type.lower()} trading. {base_strategy}"
-        elif "buy" in s:
-            return f"A solid BUY opportunity for {system_type.lower()} trading. {base_strategy}"
-        elif "hold" in s:
-            return f"Neutral stance recommended. {base_strategy}"
-        elif "sell" in s or "avoid" in s:
-            return f"Caution advised. {base_strategy}"
+        if "strong buy" in s or "strong bullish" in s:
+            return f"A high-conviction bullish technical setup for {system_type.lower()} analysis. {base_strategy}"
+        elif "buy" in s or "bullish" in s:
+            return f"A positive technical setup for {system_type.lower()} analysis. {base_strategy}"
+        elif "hold" in s or "neutral" in s or "watch" in s:
+            return f"Neutral technical stance — wait for clearer signals. {base_strategy}"
+        elif "sell" in s or "bearish" in s or "avoid" in s or "cautious" in s:
+            return f"Caution indicated by technical indicators. {base_strategy}"
         return base_strategy
 
     def _fallback_trading_plan(self, result):
@@ -1065,6 +1070,7 @@ def get_usage():
             UserUsage.cache_hit == False,
             db.or_(
                 UserUsage.endpoint.like('%/analyze/%'),
+                UserUsage.endpoint.like('%/portfolio/%'),
                 UserUsage.endpoint.like('%/compare/%'),
             )
         ).count()
