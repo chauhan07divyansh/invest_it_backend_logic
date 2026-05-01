@@ -710,26 +710,27 @@ class TradingAPI:
             return self._fallback_trading_plan(result)
 
     def _normalize_signal(self, signal: str) -> str:
-        """Map raw BUY/SELL/HOLD signals to SEBI-compliant neutral terms."""
+        """Normalize signal strings to standard BUY/HOLD/SELL that frontend classifySignal() handles."""
         s = signal.upper().strip()
-        if 'STRONG BUY' in s or 'STRONG_BUY' in s: return 'STRONG BULLISH'
-        if 'BUY' in s:    return 'BULLISH'
-        if 'STRONG SELL' in s or 'STRONG_SELL' in s: return 'STRONG BEARISH'
-        if 'SELL' in s:   return 'BEARISH'
-        if 'HOLD' in s or 'WATCH' in s: return 'NEUTRAL'
-        if 'AVOID' in s:  return 'CAUTIOUS'
-        return signal  # pass through if already compliant
+        if 'STRONG BUY'  in s or 'STRONG_BUY'  in s: return 'STRONG BUY'
+        if 'BUY'         in s:                         return 'BUY'
+        if 'STRONG SELL' in s or 'STRONG_SELL' in s:  return 'STRONG SELL'
+        if 'SELL'        in s:                         return 'SELL'
+        if 'AVOID'       in s:                         return 'SELL'
+        if 'HOLD'        in s or 'WATCH' in s:         return 'HOLD/WATCH'
+        if 'NO SIGNAL'   in s or 'NO_SIGNAL' in s:     return 'HOLD/WATCH'
+        return 'HOLD/WATCH'  # safe default
 
     def _enhance_strategy_description(self, base_strategy, signal, system_type):
         s = signal.lower()
-        if "strong buy" in s or "strong bullish" in s:
-            return f"A high-conviction bullish technical setup for {system_type.lower()} analysis. {base_strategy}"
-        elif "buy" in s or "bullish" in s:
-            return f"A positive technical setup for {system_type.lower()} analysis. {base_strategy}"
-        elif "hold" in s or "neutral" in s or "watch" in s:
-            return f"Neutral technical stance — wait for clearer signals. {base_strategy}"
-        elif "sell" in s or "bearish" in s or "avoid" in s or "cautious" in s:
-            return f"Caution indicated by technical indicators. {base_strategy}"
+        if "strong buy" in s:
+            return f"A high-conviction BUY signal for {system_type.lower()} trading. {base_strategy}"
+        elif "buy" in s:
+            return f"A solid BUY opportunity for {system_type.lower()} trading. {base_strategy}"
+        elif "hold" in s or "watch" in s or "no signal" in s:
+            return f"Neutral stance — wait for clearer signals. {base_strategy}"
+        elif "sell" in s or "avoid" in s:
+            return f"Caution advised. {base_strategy}"
         return base_strategy
 
     def _fallback_trading_plan(self, result):
