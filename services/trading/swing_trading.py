@@ -943,36 +943,62 @@ class EnhancedSwingTradingSystem:
     # SENTIMENT ANALYSIS (With caching)
     # ========================================================================
     
-    def fetch_indian_news(self, symbol: str, num_articles: int = 15) -> Optional[List[str]]:
+    def fetch_indian_news(self, symbol: str, num_articles: int = 5) -> Optional[List[str]]:
         """
-        Fetch FULL news articles using newsapi.ai (Event Registry)
+        Fetch company-specific news from Event Registry
+        Fixes:
+        - Exact phrase match (quoted keyword)
+        - Trusted financial sources only
+        - Last 7 days only
+        - Relevance validation (company name must appear in title)
+        - Metadata tracked (age, source)
         """
         try:
             if not config.EVENT_REGISTRY_API_KEY:
                 return None
 
-        # Cache check
+            # Cache check
             cache_key = self._get_cache_key("news", symbol, limit=num_articles)
             cached = self._get_from_cache(cache_key)
             if cached:
+                logger.debug(f"⚡ News cache hit for {symbol}")
                 return cached.get("articles")
 
-            base_symbol = symbol.split(".")[0]
-            stock_info = self.get_stock_info_from_db(base_symbol)
+            base_symbol  = symbol.split(".")[0]
+            stock_info   = self.get_stock_info_from_db(base_symbol)
             company_name = stock_info.get("name", base_symbol)
 
             payload = {
-                "action": "getArticles",
-                "keyword": company_name,
+                "action":      "getArticles",
+
+                # ✅ FIX 1: exact phrase, not loose keyword
+                "keyword":     f'"{company_name}"',
                 "keywordOper": "and",
-                "lang": ["eng"],
-                "articlesPage": 1,
-                "articlesCount": num_articles,
-                "articlesSortBy": "date",
+
+                # ✅ FIX 2: trusted Indian financial sources only
+                "sourceUri": [
+                    "economictimes.indiatimes.com",
+                    "moneycontrol.com",
+                    "livemint.com",
+                    "business-standard.com",
+                    "financialexpress.com",
+                    "thehindu.com",
+                    "reuters.com",
+                    "bloomberg.com"
+                ],
+
+                # ✅ FIX 3: last 7 days only, no stale articles
+                "dateStart":        (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d"),
+                "dateEnd":           datetime.now().strftime("%Y-%m-%d"),
+
+                "lang":             ["eng"],
+                "articlesPage":      1,
+                "articlesCount":     num_articles,
+                "articlesSortBy":   "date",
                 "articlesSortByAsc": False,
-                "dataType": ["news"],
+                "dataType":         ["news"],
                 "includeArticleBody": True,
-                "apiKey": config.EVENT_REGISTRY_API_KEY
+                "apiKey":            config.EVENT_REGISTRY_API_KEY
             }
 
             response = requests.post(
@@ -982,26 +1008,74 @@ class EnhancedSwingTradingSystem:
             )
 
             if response.status_code != 200:
-                logger.warning(f"Event Registry HTTP {response.status_code}")
+                logger.warning(f"Event Registry HTTP {response.status_code} for {symbol}")
                 return None
 
-            data = response.json()
-            articles = []
+            data    = response.json()
+            results = data.get("articles", {}).get("results", [])
 
-            for item in data.get("articles", {}).get("results", []):
-                body = item.get("body")
-                title = item.get("title")
+            articles       = []
+            article_metadata = []
+            now            = datetime.now(timezone.utc)
 
-                if body and len(body) > 200:
-                    articles.append(body)
-                elif title:
-                    articles.append(title)
+            # Short name variants for relevance check
+            # e.g. "HDFC Bank" → ["HDFC Bank", "HDFC"]
+            name_variants = self._get_name_variants(company_name)
 
+            for item in results:
+                title    = item.get("title", "")
+                body     = item.get("body", "")
+                date_str = item.get("dateTime") or item.get("date", "")
+                source   = item.get("source", {}).get("title", "Unknown")
+
+                # ✅ FIX 4: relevance check — title must mention company
+                if not any(v.lower() in title.lower() for v in name_variants):
+                    logger.debug(f"⚠️ Skipping irrelevant article: {title[:50]}")
+                    continue
+
+                # ✅ FIX 5: compute article age
+                age_hours = None
+                if date_str:
+                    try:
+                        published = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+                        age_hours = round((now - published).total_seconds() / 3600, 1)
+                    except Exception:
+                        pass
+
+                text = body if (body and len(body) > 200) else title
+                if not text:
+                    continue
+
+                articles.append(text)
+                article_metadata.append({
+                    "title":     title,
+                    "source":    source,
+                    "published": date_str,
+                    "age_hours": age_hours
+                })
+
+            # ✅ FIX 6: log what we actually got
             if articles:
+                ages = [m["age_hours"] for m in article_metadata if m["age_hours"] is not None]
+                avg_age = round(sum(ages) / len(ages), 1) if ages else None
+                logger.info(
+                    f"📰 {symbol}: {len(articles)} relevant articles | "
+                    f"avg age: {avg_age}h | "
+                    f"sources: {list(set(m['source'] for m in article_metadata))}"
+                )
+
                 self._set_to_cache(
                     cache_key,
-                    {"articles": articles},
+                    {
+                        "articles":  articles,
+                        "metadata":  article_metadata
+                    },
                     self.cache_ttl["news"]
+                )
+            else:
+                logger.warning(
+                    f"⚠️ {symbol}: 0 relevant articles found "
+                    f"(raw results: {len(results)}, filtered out as irrelevant)"
                 )
 
             return articles if articles else None
@@ -1009,6 +1083,25 @@ class EnhancedSwingTradingSystem:
         except Exception as e:
             logger.error(f"Event Registry fetch failed for {symbol}: {e}")
             return None
+
+
+    def _get_name_variants(self, company_name: str) -> List[str]:
+        """
+        Generate name variants for relevance checking
+        'HDFC Bank'            → ['HDFC Bank', 'HDFC']
+        'Tata Consultancy'     → ['Tata Consultancy', 'Tata']
+        'Bajaj Finance'        → ['Bajaj Finance', 'Bajaj']
+        'Infosys'              → ['Infosys']
+        """
+        variants = [company_name]
+        parts    = company_name.split()
+
+        # Add first word if meaningful (skip generic words)
+        skip_words = {"the", "of", "and", "india", "limited", "ltd", "corporation"}
+        if len(parts) >= 2 and parts[0].lower() not in skip_words:
+            variants.append(parts[0])
+
+        return variants
 
     
     def get_sample_news(self, symbol: str) -> List[str]:
