@@ -32,13 +32,15 @@ import redis
 from core import config
 from services.sentiment.hf_utils import query_hf_api
 from services.data_providers.symbol_mapper import SymbolMapper
+
 warnings.filterwarnings('ignore')
 logger = logging.getLogger(__name__)
+
+
 class EnhancedSwingTradingSystem:
     """
     Production-grade swing trading system with performance optimizations
     """
-
 
     def __init__(self, data_provider=None, redis_client=None):
         try:
@@ -72,7 +74,7 @@ class EnhancedSwingTradingSystem:
             self.cache_ttl = {
                 'ohlcv': 3600,
                 'analysis': 900,
-                'news': 86400,   # 24h — news cached per stock per day to save Event Registry tokens
+                'news': 86400,  # 24h — news cached per stock per day to save Event Registry tokens
                 'batch_analysis': 900
             }
 
@@ -91,14 +93,14 @@ class EnhancedSwingTradingSystem:
             for param in required_params:
                 if param not in self.swing_trading_params:
                     raise ValueError(f"Missing required trading parameter: {param}")
-                
+
                 value = self.swing_trading_params[param]
                 if not isinstance(value, (int, float)) or value <= 0:
                     raise ValueError(f"Invalid trading parameter {param}: {value}")
 
             if self.swing_trading_params['min_holding_period'] >= self.swing_trading_params['max_holding_period']:
                 raise ValueError("min_holding_period must be less than max_holding_period")
-            
+
             if self.swing_trading_params['risk_per_trade'] > 0.1:
                 raise ValueError("risk_per_trade cannot exceed 10%")
 
@@ -167,7 +169,7 @@ class EnhancedSwingTradingSystem:
                 "ADANIPORTS": {"name": "Adani Ports", "sector": "Infrastructure"},
                 "TATAMOTORS": {"name": "Tata Motors", "sector": "Automobile"},
                 "ITC": {"name": "ITC Limited", "sector": "Consumer Goods"},
-                
+
                 # ========== NIFTY NEXT 50 (50 stocks) ==========
                 "SIEMENS": {"name": "Siemens Limited", "sector": "Capital Goods"},
                 "HAVELLS": {"name": "Havells India", "sector": "Electricals"},
@@ -219,7 +221,7 @@ class EnhancedSwingTradingSystem:
                 "EMAMILTD": {"name": "Emami Limited", "sector": "Consumer Goods"},
                 "GODREJPROP": {"name": "Godrej Properties", "sector": "Real Estate"},
                 "OBEROIRLTY": {"name": "Oberoi Realty", "sector": "Real Estate"},
-                
+
                 # ========== NIFTY MIDCAP 100 (Top 100 liquid stocks) ==========
                 "ABCAPITAL": {"name": "Aditya Birla Capital", "sector": "Financial Services"},
                 "ABFRL": {"name": "Aditya Birla Fashion", "sector": "Retail"},
@@ -346,7 +348,7 @@ class EnhancedSwingTradingSystem:
                 "WHIRLPOOL": {"name": "Whirlpool of India", "sector": "Consumer Durables"},
                 "ZOMATO": {"name": "Zomato Limited", "sector": "Consumer Services"},
                 "ZYDUSLIFE": {"name": "Zydus Lifesciences", "sector": "Pharmaceuticals"},
-                
+
                 # ========== HIGH-GROWTH SMALLCAP PICKS (50 stocks) ==========
                 "AAVAS": {"name": "Aavas Financiers", "sector": "Financial Services"},
                 "ANANDRATHI": {"name": "Anand Rathi Wealth", "sector": "Financial Services"},
@@ -400,21 +402,22 @@ class EnhancedSwingTradingSystem:
                 "UJJIVAN": {"name": "Ujjivan Small Finance Bank", "sector": "Banking"},
                 "UTIAMC": {"name": "UTI Asset Management", "sector": "Financial Services"},
             }
-            
+
             # Remove underperforming stocks from backtest
             exclude_from_swing = ['RELIANCE', 'HDFCBANK', 'TCS']
-            
+
             original_count = len(self.indian_stocks)
             self.indian_stocks = {
                 symbol: info for symbol, info in self.indian_stocks.items()
                 if symbol not in exclude_from_swing
             }
-            
-            logger.info(f"✅ Expanded database initialized: {len(self.indian_stocks)} stocks (excluded {len(exclude_from_swing)} underperformers)")
-            
+
+            logger.info(
+                f"✅ Expanded database initialized: {len(self.indian_stocks)} stocks (excluded {len(exclude_from_swing)} underperformers)")
+
             if not self.indian_stocks:
                 raise ValueError("Stock database initialization failed - empty database")
-                
+
         except Exception as e:
             logger.error(f"Error initializing expanded stock database: {e}")
             # Fallback to minimal database
@@ -428,17 +431,17 @@ class EnhancedSwingTradingSystem:
     # ========================================================================
     # CACHING METHODS
     # ========================================================================
-    
+
     def _get_cache_key(self, prefix: str, symbol: str, **kwargs) -> str:
         """Generate cache key"""
         param_str = "_".join(f"{k}={v}" for k, v in sorted(kwargs.items()))
         return f"{prefix}:{symbol}:{param_str}" if param_str else f"{prefix}:{symbol}"
-    
+
     def _get_from_cache(self, key: str) -> Optional[dict]:
         """Get data from Redis cache"""
         if not self.cache_enabled:
             return None
-        
+
         try:
             cached_data = self.redis_client.get(key)
             if cached_data:
@@ -448,12 +451,12 @@ class EnhancedSwingTradingSystem:
         except Exception as e:
             logger.warning(f"Cache read error: {e}")
             return None
-    
+
     def _set_to_cache(self, key: str, data: dict, ttl: int):
         """Set data to Redis cache"""
         if not self.cache_enabled:
             return
-        
+
         try:
             self.redis_client.setex(key, ttl, json.dumps(data))
             logger.debug(f"💾 Cached: {key} (TTL: {ttl}s)")
@@ -463,42 +466,42 @@ class EnhancedSwingTradingSystem:
     # ========================================================================
     # PARALLEL ANALYSIS METHODS
     # ========================================================================
-    
-    def analyze_stocks_parallel(self, symbols: List[str], max_workers: int = 10, 
+
+    def analyze_stocks_parallel(self, symbols: List[str], max_workers: int = 10,
                                 period: str = "6mo") -> List[Dict]:
         """
         Analyze multiple stocks in parallel for 10x speed improvement
-        
+
         Args:
             symbols: List of stock symbols to analyze
             max_workers: Number of parallel workers (default: 10)
             period: Data period (default: 6mo)
-            
+
         Returns:
             List of analysis results
         """
         try:
             logger.info(f"🚀 Starting parallel analysis of {len(symbols)} stocks with {max_workers} workers")
             start_time = time.time()
-            
+
             results = []
             failed_count = 0
-            
+
             with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
                 # Submit all tasks
                 future_to_symbol = {
                     executor.submit(self.analyze_swing_trading_stock, symbol, period): symbol
                     for symbol in symbols
                 }
-                
+
                 # Process completed tasks
                 completed = 0
                 total = len(symbols)
-                
+
                 for future in concurrent.futures.as_completed(future_to_symbol):
                     symbol = future_to_symbol[future]
                     completed += 1
-                    
+
                     try:
                         result = future.result(timeout=30)  # 30s timeout per stock
                         if result and result.get('swing_score', 0) > 0:
@@ -507,77 +510,78 @@ class EnhancedSwingTradingSystem:
                         else:
                             failed_count += 1
                             logger.warning(f"⚠️ [{completed}/{total}] {symbol}: Analysis failed or zero score")
-                    
+
                     except concurrent.futures.TimeoutError:
                         failed_count += 1
                         logger.error(f"❌ [{completed}/{total}] {symbol}: Timeout (>30s)")
-                    
+
                     except Exception as e:
                         failed_count += 1
                         logger.error(f"❌ [{completed}/{total}] {symbol}: {str(e)}")
-            
+
             # Sort by score
             results.sort(key=lambda x: x.get('swing_score', 0), reverse=True)
-            
+
             elapsed_time = time.time() - start_time
-            logger.info(f"✅ Parallel analysis complete: {len(results)} successful, {failed_count} failed in {elapsed_time:.1f}s")
-            
+            logger.info(
+                f"✅ Parallel analysis complete: {len(results)} successful, {failed_count} failed in {elapsed_time:.1f}s")
+
             return results
-            
+
         except Exception as e:
             logger.error(f"Error in parallel analysis: {e}")
             return []
-    
+
     def get_cached_batch_analysis(self, risk_appetite: Optional[str] = None) -> Optional[List[Dict]]:
         """
         Get pre-computed batch analysis from cache
-        
+
         Args:
             risk_appetite: Filter by risk appetite (LOW/MEDIUM/HIGH)
-            
+
         Returns:
             Cached analysis results or None
         """
         try:
             cache_key = "batch_analysis:all_stocks"
             cached_results = self._get_from_cache(cache_key)
-            
+
             if cached_results:
                 logger.info(f"⚡ Retrieved {len(cached_results)} results from cache")
-                
+
                 if risk_appetite:
                     filtered = self.filter_stocks_by_risk_appetite(cached_results, risk_appetite)
                     logger.info(f"📊 Filtered to {len(filtered)} stocks for {risk_appetite} risk")
                     return filtered
-                
+
                 return cached_results
-            
+
             return None
-            
+
         except Exception as e:
             logger.error(f"Error retrieving cached batch analysis: {e}")
             return None
-    
+
     def analyze_and_cache_all_stocks(self, max_workers: int = 10):
         """
         Analyze all stocks and cache results (for background worker)
-        
+
         Args:
             max_workers: Number of parallel workers
         """
         try:
             logger.info("🔄 Starting background batch analysis...")
-            
+
             symbols = self.get_all_stock_symbols()
             results = self.analyze_stocks_parallel(symbols, max_workers=max_workers)
-            
+
             # Cache results
             cache_key = "batch_analysis:all_stocks"
             self._set_to_cache(cache_key, results, self.cache_ttl['batch_analysis'])
-            
+
             logger.info(f"✅ Background analysis complete: {len(results)} stocks cached")
             return results
-            
+
         except Exception as e:
             logger.error(f"Error in background batch analysis: {e}")
             return []
@@ -585,7 +589,7 @@ class EnhancedSwingTradingSystem:
     # ========================================================================
     # UTILITY METHODS
     # ========================================================================
-    
+
     def get_all_stock_symbols(self) -> List[str]:
         """Get all stock symbols from database"""
         try:
@@ -595,7 +599,7 @@ class EnhancedSwingTradingSystem:
         except Exception as e:
             logger.error(f"Error getting stock symbols: {e}")
             return []
-    
+
     @lru_cache(maxsize=1000)
     def get_stock_info_from_db(self, symbol: str) -> Dict:
         """Get stock info from database (cached)"""
@@ -605,13 +609,13 @@ class EnhancedSwingTradingSystem:
         except Exception as e:
             logger.error(f"Error getting stock info for {symbol}: {e}")
             return {"name": str(symbol), "sector": "Unknown"}
-    
+
     @lru_cache(maxsize=100)
     def get_sector_weights(self, sector: str) -> Tuple[float, float]:
         """Get dynamic weights based on sector (cached)"""
         try:
             sector = str(sector).lower().strip()
-            
+
             weights_map = {
                 "technology": (0.45, 0.55),
                 "information technology": (0.45, 0.55),
@@ -626,13 +630,13 @@ class EnhancedSwingTradingSystem:
                 "healthcare": (0.50, 0.50),
                 "retail": (0.45, 0.55),
             }
-            
+
             for key, weights in weights_map.items():
                 if key in sector:
                     return weights
-            
+
             return 0.55, 0.45  # Default
-            
+
         except Exception as e:
             logger.error(f"Error getting sector weights: {e}")
             return 0.55, 0.45
@@ -640,63 +644,63 @@ class EnhancedSwingTradingSystem:
     # ========================================================================
     # DATA FETCHING METHODS (Updated with caching)
     # ========================================================================
-    
+
     def get_indian_stock_data(self, symbol: str, period: str = "6mo") -> Tuple:
         """Get stock data with caching support"""
         try:
             # Check cache first
             cache_key = self._get_cache_key("ohlcv", symbol, period=period)
             cached_data = self._get_from_cache(cache_key)
-            
+
             if cached_data:
                 # Reconstruct DataFrame from cached dict
                 df = pd.DataFrame(cached_data['ohlcv'])
                 df['Date'] = pd.to_datetime(df['date'])
                 df = df.set_index('Date').drop(columns=['date'])
                 df.columns = ['Open', 'High', 'Low', 'Close', 'Volume']
-                
+
                 info = cached_data['info']
                 final_symbol = cached_data['symbol']
-                
+
                 logger.debug(f"⚡ Using cached OHLCV for {symbol}")
                 return df, info, final_symbol
-            
+
             # Fetch from data provider
             if not self.data_provider:
                 logger.error("❌ Data provider not available")
                 return None, None, None
-            
+
             symbol_clean = str(symbol).upper().replace(".NS", "").replace(".BO", "")
-            
+
             stock_data = self.data_provider.get_stock_data(
                 symbol=symbol_clean,
                 fetch_ohlcv=True,
                 fetch_fundamentals=False,
                 period=period
             )
-            
+
             if stock_data.get('errors'):
                 logger.warning(f"Data fetch errors for {symbol}: {stock_data['errors']}")
-            
+
             ohlcv_list = stock_data.get('ohlcv')
             if not ohlcv_list:
                 logger.error(f"❌ No OHLCV data for {symbol}")
                 return None, None, None
-            
+
             # Convert to DataFrame
             df = pd.DataFrame(ohlcv_list)
             df['Date'] = pd.to_datetime(df['date'])
             df = df.set_index('Date')
             df = df[['open', 'high', 'low', 'close', 'volume']]
             df.columns = ['Open', 'High', 'Low', 'Close', 'Volume']
-            
+
             info = {
                 'shortName': stock_data.get('company_name', symbol_clean),
                 'symbol': symbol_clean
             }
-            
+
             final_symbol = f"{symbol_clean}.{stock_data.get('exchange_used', 'NSE')}"
-            
+
             # Cache the results
             cache_data = {
                 'ohlcv': ohlcv_list,
@@ -704,10 +708,10 @@ class EnhancedSwingTradingSystem:
                 'symbol': final_symbol
             }
             self._set_to_cache(cache_key, cache_data, self.cache_ttl['ohlcv'])
-            
+
             logger.debug(f"✅ Fetched and cached {len(df)} days for {symbol}")
             return df, info, final_symbol
-            
+
         except Exception as e:
             logger.error(f"Error fetching data for {symbol}: {e}")
             return None, None, None
@@ -715,13 +719,13 @@ class EnhancedSwingTradingSystem:
     # ========================================================================
     # TECHNICAL INDICATORS (Optimized)
     # ========================================================================
-    
+
     def safe_rolling_calculation(self, data: pd.Series, window: int, operation: str = 'mean') -> pd.Series:
         """Safely perform rolling calculations"""
         try:
             if data is None or data.empty or len(data) < window:
                 return pd.Series([np.nan] * len(data), index=data.index if hasattr(data, 'index') else None)
-            
+
             if operation == 'mean':
                 return data.rolling(window=window, min_periods=1).mean()
             elif operation == 'std':
@@ -732,152 +736,152 @@ class EnhancedSwingTradingSystem:
                 return data.rolling(window=window, min_periods=1).max()
             else:
                 return pd.Series([np.nan] * len(data), index=data.index)
-                
+
         except Exception as e:
             logger.error(f"Error in safe_rolling_calculation: {e}")
             return pd.Series([np.nan] * len(data), index=data.index if hasattr(data, 'index') else None)
-    
+
     def calculate_rsi(self, prices: pd.Series, period: int = 14) -> pd.Series:
         """Calculate RSI"""
         try:
             if prices is None or prices.empty or len(prices) < period:
                 return pd.Series([50] * len(prices), index=prices.index)
-            
+
             delta = prices.diff()
             gain = delta.where(delta > 0, 0)
             loss = -delta.where(delta < 0, 0)
-            
+
             avg_gain = self.safe_rolling_calculation(gain, period, 'mean')
             avg_loss = self.safe_rolling_calculation(loss, period, 'mean')
-            
+
             if avg_gain.empty or avg_loss.empty:
                 return pd.Series([50] * len(prices), index=prices.index)
-            
+
             avg_loss = avg_loss.replace(0, np.nan)
             rs = avg_gain / avg_loss
             rsi = 100 - (100 / (1 + rs))
-            
+
             return rsi.fillna(50)
-            
+
         except Exception as e:
             logger.error(f"Error calculating RSI: {e}")
             return pd.Series([50] * len(prices), index=prices.index)
-    
+
     def calculate_bollinger_bands(self, prices: pd.Series, period: int = 20, std_dev: int = 2) -> Tuple:
         """Calculate Bollinger Bands"""
         try:
             if prices is None or prices.empty or len(prices) < period:
                 nan_series = pd.Series([np.nan] * len(prices), index=prices.index)
                 return nan_series, nan_series, nan_series
-            
+
             sma = self.safe_rolling_calculation(prices, period, 'mean')
             std = self.safe_rolling_calculation(prices, period, 'std')
-            
+
             if sma.empty or std.empty:
                 nan_series = pd.Series([np.nan] * len(prices), index=prices.index)
                 return nan_series, nan_series, nan_series
-            
+
             upper_band = sma + (std * std_dev)
             lower_band = sma - (std * std_dev)
-            
+
             return upper_band, sma, lower_band
-            
+
         except Exception as e:
             logger.error(f"Error calculating Bollinger Bands: {e}")
             nan_series = pd.Series([np.nan] * len(prices), index=prices.index)
             return nan_series, nan_series, nan_series
-    
+
     def calculate_macd(self, prices: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9) -> Tuple:
         """Calculate MACD"""
         try:
             if prices is None or prices.empty or len(prices) < slow:
                 zeros = pd.Series([0] * len(prices), index=prices.index)
                 return zeros, zeros, zeros
-            
+
             exp1 = prices.ewm(span=fast, adjust=False).mean()
             exp2 = prices.ewm(span=slow, adjust=False).mean()
-            
+
             macd_line = exp1 - exp2
             signal_line = macd_line.ewm(span=signal, adjust=False).mean()
             histogram = macd_line - signal_line
-            
+
             return macd_line, signal_line, histogram
-            
+
         except Exception as e:
             logger.error(f"Error calculating MACD: {e}")
             zeros = pd.Series([0] * len(prices), index=prices.index)
             return zeros, zeros, zeros
-    
-    def calculate_stochastic(self, high: pd.Series, low: pd.Series, close: pd.Series, 
-                            k_period: int = 14, d_period: int = 3) -> Tuple:
+
+    def calculate_stochastic(self, high: pd.Series, low: pd.Series, close: pd.Series,
+                             k_period: int = 14, d_period: int = 3) -> Tuple:
         """Calculate Stochastic Oscillator"""
         try:
             if any(x is None or x.empty for x in [high, low, close]) or len(close) < k_period:
                 nan_series = pd.Series([np.nan] * len(close), index=close.index)
                 return nan_series, nan_series
-            
+
             lowest_low = self.safe_rolling_calculation(low, k_period, 'min')
             highest_high = self.safe_rolling_calculation(high, k_period, 'max')
-            
+
             denominator = highest_high - lowest_low
             denominator = denominator.replace(0, np.nan)
-            
+
             k_percent = 100 * ((close - lowest_low) / denominator)
             d_percent = self.safe_rolling_calculation(k_percent, d_period, 'mean')
-            
+
             return k_percent, d_percent
-            
+
         except Exception as e:
             logger.error(f"Error calculating Stochastic: {e}")
             nan_series = pd.Series([np.nan] * len(close), index=close.index)
             return nan_series, nan_series
-    
+
     def calculate_support_resistance(self, data: pd.DataFrame, window: int = 20) -> Tuple:
         """Calculate support and resistance levels"""
         try:
             if data is None or data.empty or len(data) < window:
                 return data['Low'].min(), data['High'].max()
-            
+
             highs = self.safe_rolling_calculation(data['High'], window, 'max')
             lows = self.safe_rolling_calculation(data['Low'], window, 'min')
-            
+
             resistance_levels = []
             support_levels = []
-            
+
             for i in range(window, len(data)):
                 if not pd.isna(highs.iloc[i]) and data['High'].iloc[i] == highs.iloc[i]:
                     resistance_levels.append(data['High'].iloc[i])
                 if not pd.isna(lows.iloc[i]) and data['Low'].iloc[i] == lows.iloc[i]:
                     support_levels.append(data['Low'].iloc[i])
-            
+
             current_resistance = max(resistance_levels[-3:]) if len(resistance_levels) >= 3 else data['High'].max()
             current_support = min(support_levels[-3:]) if len(support_levels) >= 3 else data['Low'].min()
-            
+
             return current_support, current_resistance
-            
+
         except Exception as e:
             logger.error(f"Error calculating support/resistance: {e}")
             return data['Low'].min(), data['High'].max()
-    
+
     def calculate_atr(self, high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14) -> pd.Series:
         """Calculate Average True Range"""
         try:
             if any(x is None or x.empty for x in [high, low, close]) or len(close) < period:
                 return pd.Series([np.nan] * len(close), index=close.index)
-            
+
             high_low = high - low
             high_close = np.abs(high - close.shift())
             low_close = np.abs(low - close.shift())
-            
+
             tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
             atr = self.safe_rolling_calculation(tr, period, 'mean')
-            
+
             return atr
-            
+
         except Exception as e:
             logger.error(f"Error calculating ATR: {e}")
             return pd.Series([np.nan] * len(close), index=close.index)
-    
+
     def calculate_risk_metrics(self, data: pd.DataFrame) -> Dict:
         """Calculate comprehensive risk metrics"""
         default_metrics = {
@@ -888,36 +892,36 @@ class EnhancedSwingTradingSystem:
             'atr': 0,
             'risk_level': 'HIGH'
         }
-        
+
         try:
             if data is None or data.empty or 'Close' not in data.columns or len(data) < 2:
                 return default_metrics
-            
+
             returns = data['Close'].pct_change().dropna()
-            
+
             # Volatility
             volatility = returns.std() * np.sqrt(252)
             volatility = volatility if not pd.isna(volatility) else 0.3
-            
+
             # VaR
             var_95 = np.percentile(returns.dropna(), 5) if len(returns) > 20 else -0.05
             var_95 = var_95 if not pd.isna(var_95) else -0.05
-            
+
             # Max Drawdown
             rolling_max = data['Close'].expanding().max()
             drawdown = (data['Close'] - rolling_max) / rolling_max
             max_drawdown = drawdown.min() if not pd.isna(drawdown.min()) else -0.2
-            
+
             # Sharpe Ratio
             risk_free_rate = 0.06
             excess_returns = returns.mean() * 252 - risk_free_rate
             sharpe_ratio = excess_returns / volatility if volatility > 0 else 0
             sharpe_ratio = sharpe_ratio if not pd.isna(sharpe_ratio) else 0
-            
+
             # ATR
             atr = self.calculate_atr(data['High'], data['Low'], data['Close'])
             current_atr = atr.iloc[-1] if not atr.empty and not pd.isna(atr.iloc[-1]) else data['Close'].iloc[-1] * 0.02
-            
+
             # Risk Level
             if volatility > 0.4:
                 risk_level = 'HIGH'
@@ -925,7 +929,7 @@ class EnhancedSwingTradingSystem:
                 risk_level = 'MEDIUM'
             else:
                 risk_level = 'LOW'
-            
+
             return {
                 'volatility': float(volatility),
                 'var_95': float(var_95),
@@ -934,7 +938,7 @@ class EnhancedSwingTradingSystem:
                 'atr': float(current_atr),
                 'risk_level': risk_level
             }
-            
+
         except Exception as e:
             logger.error(f"Error calculating risk metrics: {e}")
             return default_metrics
@@ -942,16 +946,10 @@ class EnhancedSwingTradingSystem:
     # ========================================================================
     # SENTIMENT ANALYSIS (With caching)
     # ========================================================================
-    
-    def fetch_indian_news(self, symbol: str, num_articles: int = 5) -> Optional[List[str]]:
+
+    def fetch_indian_news(self, symbol: str, num_articles: int = 15) -> Optional[List[str]]:
         """
-        Fetch company-specific news from Event Registry
-        Fixes:
-        - Exact phrase match (quoted keyword)
-        - Trusted financial sources only
-        - Last 7 days only
-        - Relevance validation (company name must appear in title)
-        - Metadata tracked (age, source)
+        Fetch FULL news articles using newsapi.ai (Event Registry)
         """
         try:
             if not config.EVENT_REGISTRY_API_KEY:
@@ -961,44 +959,24 @@ class EnhancedSwingTradingSystem:
             cache_key = self._get_cache_key("news", symbol, limit=num_articles)
             cached = self._get_from_cache(cache_key)
             if cached:
-                logger.debug(f"⚡ News cache hit for {symbol}")
                 return cached.get("articles")
 
-            base_symbol  = symbol.split(".")[0]
-            stock_info   = self.get_stock_info_from_db(base_symbol)
+            base_symbol = symbol.split(".")[0]
+            stock_info = self.get_stock_info_from_db(base_symbol)
             company_name = stock_info.get("name", base_symbol)
 
             payload = {
-                "action":      "getArticles",
-
-                # ✅ FIX 1: exact phrase, not loose keyword
-                "keyword":     f'"{company_name}"',
+                "action": "getArticles",
+                "keyword": company_name,
                 "keywordOper": "and",
-
-                # ✅ FIX 2: trusted Indian financial sources only
-                "sourceUri": [
-                    "economictimes.indiatimes.com",
-                    "moneycontrol.com",
-                    "livemint.com",
-                    "business-standard.com",
-                    "financialexpress.com",
-                    "thehindu.com",
-                    "reuters.com",
-                    "bloomberg.com"
-                ],
-
-                # ✅ FIX 3: last 7 days only, no stale articles
-                "dateStart":        (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d"),
-                "dateEnd":           datetime.now().strftime("%Y-%m-%d"),
-
-                "lang":             ["eng"],
-                "articlesPage":      1,
-                "articlesCount":     num_articles,
-                "articlesSortBy":   "date",
+                "lang": ["eng"],
+                "articlesPage": 1,
+                "articlesCount": num_articles,
+                "articlesSortBy": "date",
                 "articlesSortByAsc": False,
-                "dataType":         ["news"],
+                "dataType": ["news"],
                 "includeArticleBody": True,
-                "apiKey":            config.EVENT_REGISTRY_API_KEY
+                "apiKey": config.EVENT_REGISTRY_API_KEY
             }
 
             response = requests.post(
@@ -1008,74 +986,26 @@ class EnhancedSwingTradingSystem:
             )
 
             if response.status_code != 200:
-                logger.warning(f"Event Registry HTTP {response.status_code} for {symbol}")
+                logger.warning(f"Event Registry HTTP {response.status_code}")
                 return None
 
-            data    = response.json()
-            results = data.get("articles", {}).get("results", [])
+            data = response.json()
+            articles = []
 
-            articles       = []
-            article_metadata = []
-            now            = datetime.now(timezone.utc)
+            for item in data.get("articles", {}).get("results", []):
+                body = item.get("body")
+                title = item.get("title")
 
-            # Short name variants for relevance check
-            # e.g. "HDFC Bank" → ["HDFC Bank", "HDFC"]
-            name_variants = self._get_name_variants(company_name)
+                if body and len(body) > 200:
+                    articles.append(body)
+                elif title:
+                    articles.append(title)
 
-            for item in results:
-                title    = item.get("title", "")
-                body     = item.get("body", "")
-                date_str = item.get("dateTime") or item.get("date", "")
-                source   = item.get("source", {}).get("title", "Unknown")
-
-                # ✅ FIX 4: relevance check — title must mention company
-                if not any(v.lower() in title.lower() for v in name_variants):
-                    logger.debug(f"⚠️ Skipping irrelevant article: {title[:50]}")
-                    continue
-
-                # ✅ FIX 5: compute article age
-                age_hours = None
-                if date_str:
-                    try:
-                        published = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
-                        age_hours = round((now - published).total_seconds() / 3600, 1)
-                    except Exception:
-                        pass
-
-                text = body if (body and len(body) > 200) else title
-                if not text:
-                    continue
-
-                articles.append(text)
-                article_metadata.append({
-                    "title":     title,
-                    "source":    source,
-                    "published": date_str,
-                    "age_hours": age_hours
-                })
-
-            # ✅ FIX 6: log what we actually got
             if articles:
-                ages = [m["age_hours"] for m in article_metadata if m["age_hours"] is not None]
-                avg_age = round(sum(ages) / len(ages), 1) if ages else None
-                logger.info(
-                    f"📰 {symbol}: {len(articles)} relevant articles | "
-                    f"avg age: {avg_age}h | "
-                    f"sources: {list(set(m['source'] for m in article_metadata))}"
-                )
-
                 self._set_to_cache(
                     cache_key,
-                    {
-                        "articles":  articles,
-                        "metadata":  article_metadata
-                    },
+                    {"articles": articles},
                     self.cache_ttl["news"]
-                )
-            else:
-                logger.warning(
-                    f"⚠️ {symbol}: 0 relevant articles found "
-                    f"(raw results: {len(results)}, filtered out as irrelevant)"
                 )
 
             return articles if articles else None
@@ -1084,33 +1014,13 @@ class EnhancedSwingTradingSystem:
             logger.error(f"Event Registry fetch failed for {symbol}: {e}")
             return None
 
-
-    def _get_name_variants(self, company_name: str) -> List[str]:
-        """
-        Generate name variants for relevance checking
-        'HDFC Bank'            → ['HDFC Bank', 'HDFC']
-        'Tata Consultancy'     → ['Tata Consultancy', 'Tata']
-        'Bajaj Finance'        → ['Bajaj Finance', 'Bajaj']
-        'Infosys'              → ['Infosys']
-        """
-        variants = [company_name]
-        parts    = company_name.split()
-
-        # Add first word if meaningful (skip generic words)
-        skip_words = {"the", "of", "and", "india", "limited", "ltd", "corporation"}
-        if len(parts) >= 2 and parts[0].lower() not in skip_words:
-            variants.append(parts[0])
-
-        return variants
-
-    
     def get_sample_news(self, symbol: str) -> List[str]:
         """Generate sample news"""
         try:
             base_symbol = str(symbol).split('.')[0]
             stock_info = self.get_stock_info_from_db(base_symbol)
             company_name = stock_info.get("name", base_symbol)
-            
+
             return [
                 f"{company_name} reports strong quarterly earnings",
                 f"Analysts upgrade {company_name} target price",
@@ -1121,7 +1031,7 @@ class EnhancedSwingTradingSystem:
         except Exception as e:
             logger.error(f"Error generating sample news: {e}")
             return [f"Market analysis for {symbol}"]
-    
+
     def _analyze_sentiment_via_api(self, articles: List[str]) -> Optional[Tuple]:
         try:
             payload = {"inputs": articles}
@@ -1164,17 +1074,17 @@ class EnhancedSwingTradingSystem:
         """Fallback sentiment analysis with TextBlob"""
         sentiments = []
         confidences = []
-        
+
         for article in articles:
             try:
                 if not article or not isinstance(article, str):
                     sentiments.append('neutral')
                     confidences.append(0.3)
                     continue
-                
+
                 blob = TextBlob(article)
                 polarity = blob.sentiment.polarity
-                
+
                 if polarity > 0.1:
                     sentiments.append('positive')
                     confidences.append(min(abs(polarity), 0.8))
@@ -1184,13 +1094,13 @@ class EnhancedSwingTradingSystem:
                 else:
                     sentiments.append('neutral')
                     confidences.append(0.5)
-                    
+
             except Exception:
                 sentiments.append('neutral')
                 confidences.append(0.3)
-        
+
         return sentiments, confidences
-    
+
     def analyze_news_sentiment(self, symbol: str, num_articles: int = 15) -> Tuple:
         """Main sentiment analysis function"""
         try:
@@ -1200,18 +1110,17 @@ class EnhancedSwingTradingSystem:
             if not articles:
                 articles = self.get_sample_news(symbol)
 
-            
             # Try API first
             if self.model_api_available:
                 api_result = self._analyze_sentiment_via_api(articles)
                 if api_result:
                     sentiments, confidences = api_result
                     return sentiments, articles, confidences, "SBERT API", news_source
-            
+
             # Fallback to TextBlob
             sentiments, confidences = self.analyze_sentiment_with_textblob(articles)
             return sentiments, articles, confidences, "TextBlob", news_source
-            
+
         except Exception as e:
             logger.error(f"Error in sentiment analysis for {symbol}: {e}")
             return [], [], [], "Error", "Error"
@@ -1219,22 +1128,22 @@ class EnhancedSwingTradingSystem:
     # ========================================================================
     # SCORING & ANALYSIS
     # ========================================================================
-    
+
     def calculate_swing_trading_score(self, data: pd.DataFrame, sentiment_data: Tuple, sector: str) -> float:
         """Calculate comprehensive swing trading score"""
         try:
             tech_weight, sentiment_weight = self.get_sector_weights(sector)
-            
+
             technical_score = 0
             sentiment_score = 50
-            
+
             if data is None or data.empty:
                 return 0
-            
+
             current_price = data['Close'].iloc[-1]
             if pd.isna(current_price) or current_price <= 0:
                 return 0
-            
+
             # RSI (20 points)
             rsi = self.calculate_rsi(data['Close'])
             if not rsi.empty and not pd.isna(rsi.iloc[-1]):
@@ -1245,7 +1154,7 @@ class EnhancedSwingTradingSystem:
                     technical_score += 15
                 elif current_rsi > 70:
                     technical_score += 10
-            
+
             # Bollinger Bands (15 points)
             bb_upper, bb_middle, bb_lower = self.calculate_bollinger_bands(data['Close'])
             if not bb_upper.empty and not any(pd.isna([bb_upper.iloc[-1], bb_lower.iloc[-1]])):
@@ -1256,7 +1165,7 @@ class EnhancedSwingTradingSystem:
                     technical_score += 12
                 elif bb_position > 0.8:
                     technical_score += 8
-            
+
             # Stochastic (15 points)
             stoch_k, stoch_d = self.calculate_stochastic(data['High'], data['Low'], data['Close'])
             if not stoch_k.empty and not any(pd.isna([stoch_k.iloc[-1], stoch_d.iloc[-1]])):
@@ -1266,7 +1175,7 @@ class EnhancedSwingTradingSystem:
                     technical_score += 15
                 elif 20 <= k_val <= 80:
                     technical_score += 10
-            
+
             # MACD (15 points)
             macd_line, signal_line, histogram = self.calculate_macd(data['Close'])
             if not macd_line.empty and not any(pd.isna([macd_line.iloc[-1], signal_line.iloc[-1]])):
@@ -1275,7 +1184,7 @@ class EnhancedSwingTradingSystem:
                 if len(histogram) > 1 and not any(pd.isna([histogram.iloc[-1], histogram.iloc[-2]])):
                     if histogram.iloc[-1] > histogram.iloc[-2]:
                         technical_score += 5
-            
+
             # Volume (10 points)
             if 'Volume' in data.columns:
                 avg_volume = self.safe_rolling_calculation(data['Volume'], 20, 'mean').iloc[-1]
@@ -1285,7 +1194,7 @@ class EnhancedSwingTradingSystem:
                         technical_score += 10
                     elif current_volume > avg_volume:
                         technical_score += 5
-            
+
             # Support/Resistance (10 points)
             support, resistance = self.calculate_support_resistance(data)
             if support and resistance and not any(pd.isna([support, resistance])):
@@ -1294,7 +1203,7 @@ class EnhancedSwingTradingSystem:
                     technical_score += 8
                 elif 0.05 <= distance_to_support <= 0.15:
                     technical_score += 10
-            
+
             # Moving Averages (15 points)
             if len(data) >= 50:
                 ma_20 = self.safe_rolling_calculation(data['Close'], 20, 'mean').iloc[-1]
@@ -1306,9 +1215,9 @@ class EnhancedSwingTradingSystem:
                         technical_score += 10
                     elif ma_20 > ma_50:
                         technical_score += 5
-            
+
             technical_score = min(100, max(0, technical_score))
-            
+
             # Sentiment Score
             if sentiment_data and len(sentiment_data) >= 3:
                 sentiments = sentiment_data[0] if len(sentiment_data) > 0 else []
@@ -1316,7 +1225,7 @@ class EnhancedSwingTradingSystem:
                 if sentiments and confidences:
                     sentiment_value = 0
                     total_weight = 0
-                    
+
                     for sentiment, confidence in zip(sentiments, confidences):
                         weight = confidence if not pd.isna(confidence) else 0.5
                         if sentiment == 'positive':
@@ -1324,21 +1233,21 @@ class EnhancedSwingTradingSystem:
                         elif sentiment == 'negative':
                             sentiment_value -= weight
                         total_weight += weight
-                    
+
                     if total_weight > 0:
                         normalized_sentiment = sentiment_value / total_weight
                         sentiment_score = 50 + (normalized_sentiment * 50)
-            
+
             sentiment_score = min(100, max(0, sentiment_score))
-            
+
             # Combine scores
             final_score = (technical_score * tech_weight) + (sentiment_score * sentiment_weight)
             return min(100, max(0, final_score))
-            
+
         except Exception as e:
             logger.error(f"Error calculating swing score: {e}")
             return 0
-    
+
     def generate_trading_plan(self, data: pd.DataFrame, score: float, risk_metrics: Dict) -> Dict:
         """Generate trading plan with realistic targets"""
         default_plan = {
@@ -1348,13 +1257,13 @@ class EnhancedSwingTradingSystem:
             'targets': {'target_1': 0, 'target_2': 0, 'target_3': 0},
             'holding_period': f"{self.swing_trading_params['min_holding_period']}-{self.swing_trading_params['max_holding_period']} days"
         }
-        
+
         try:
             current_price = data['Close'].iloc[-1]
             atr = risk_metrics.get('atr', current_price * 0.02)
             if pd.isna(atr) or atr <= 0:
                 atr = current_price * 0.02
-            
+
             # Entry signal
             if score >= 75:
                 entry_signal = "STRONG BUY"
@@ -1371,21 +1280,21 @@ class EnhancedSwingTradingSystem:
             else:
                 entry_signal = "STRONG SELL"
                 entry_strategy = "Exit immediately."
-            
+
             # Stop loss and targets
             stop_loss_distance = atr * 1.5
             stop_loss = max(current_price - stop_loss_distance, 0)
-            
+
             target_1 = current_price + (stop_loss_distance * 1.0)
             target_2 = current_price + (stop_loss_distance * 1.5)
             target_3 = current_price + (stop_loss_distance * 2.0)
-            
+
             # Ensure targets are above current price
             if target_1 <= current_price:
                 target_1 = current_price * 1.03
                 target_2 = current_price * 1.05
                 target_3 = current_price * 1.08
-            
+
             return {
                 'entry_signal': entry_signal,
                 'entry_strategy': entry_strategy,
@@ -1397,11 +1306,11 @@ class EnhancedSwingTradingSystem:
                 },
                 'holding_period': f"{self.swing_trading_params['min_holding_period']}-{self.swing_trading_params['max_holding_period']} days"
             }
-            
+
         except Exception as e:
             logger.error(f"Error generating trading plan: {e}")
             return default_plan
-    
+
     def analyze_swing_trading_stock(self, symbol: str, period: str = "6mo") -> Optional[Dict]:
         """Main stock analysis function with caching (FIXED + SAFE)"""
         try:
@@ -1545,11 +1454,10 @@ class EnhancedSwingTradingSystem:
             logger.error(f"Error analyzing {symbol}: {e}")
             return None
 
-
     # ========================================================================
     # PORTFOLIO GENERATION
     # ========================================================================
-    
+
     def filter_stocks_by_risk_appetite(self, results: List[Dict], risk_appetite: str) -> List[Dict]:
         """Filter stocks by risk appetite"""
         try:
@@ -1558,65 +1466,65 @@ class EnhancedSwingTradingSystem:
                 'MEDIUM': 0.40,
                 'HIGH': 1.0
             }
-            
+
             max_volatility = risk_thresholds.get(risk_appetite.upper(), 0.40)
-            
+
             filtered = []
             for stock in results:
                 volatility = stock.get('risk_metrics', {}).get('volatility', 1.0)
                 entry_signal = stock.get('trading_plan', {}).get('entry_signal', 'HOLD')
-                
+
                 if volatility <= max_volatility and entry_signal in ['BUY', 'STRONG BUY']:
                     filtered.append(stock)
-            
+
             logger.info(f"Filtered {len(filtered)}/{len(results)} stocks for {risk_appetite} risk")
             return filtered
-            
+
         except Exception as e:
             logger.error(f"Error filtering stocks: {e}")
             return []
-    
-    def generate_portfolio_allocation(self, results: List[Dict], total_capital: float, 
-                                     risk_appetite: str) -> List[Dict]:
+
+    def generate_portfolio_allocation(self, results: List[Dict], total_capital: float,
+                                      risk_appetite: str) -> List[Dict]:
         """Generate portfolio allocation (returns structured JSON)"""
         try:
             if not results or total_capital <= 0:
                 return []
-            
+
             max_positions = min(10, len(results))
             risk_per_trade_pct = self.swing_trading_params['risk_per_trade']
             max_position_size_pct = 0.20
-            
+
             base_allocation = total_capital / max_positions
-            
+
             portfolio_data = []
             total_allocated = 0
-            
+
             for i, result in enumerate(results, 1):
                 if len(portfolio_data) >= max_positions:
                     break
-                
+
                 current_price = result.get('current_price', 0)
                 stop_loss = result.get('trading_plan', {}).get('stop_loss', 0)
                 swing_score = result.get('swing_score', 0)
-                
+
                 if current_price <= 0 or stop_loss <= 0 or current_price <= stop_loss:
                     continue
-                
+
                 risk_per_share = current_price - stop_loss
                 capital_at_risk = total_capital * risk_per_trade_pct
                 risk_based_shares = int(capital_at_risk / risk_per_share)
-                
+
                 equal_weight_shares = int(base_allocation / current_price)
                 max_position_shares = int((total_capital * max_position_size_pct) / current_price)
-                
+
                 final_shares = min(equal_weight_shares, risk_based_shares, max_position_shares)
-                
+
                 if final_shares <= 0:
                     continue
-                
+
                 final_amount = final_shares * current_price
-                
+
                 if total_allocated + final_amount > total_capital:
                     remaining = total_capital - total_allocated
                     if remaining >= current_price:
@@ -1624,12 +1532,12 @@ class EnhancedSwingTradingSystem:
                         final_amount = final_shares * current_price
                     else:
                         continue
-                
+
                 actual_risk = final_shares * risk_per_share
                 allocation_pct = (final_amount / total_capital) * 100
-                
+
                 total_allocated += final_amount
-                
+
                 portfolio_data.append({
                     'rank': i,
                     'symbol': result.get('symbol', 'Unknown'),
@@ -1643,9 +1551,9 @@ class EnhancedSwingTradingSystem:
                     'risk': float(actual_risk),
                     'sector': result.get('sector', 'Unknown')
                 })
-            
+
             return portfolio_data
-            
+
         except Exception as e:
             logger.error(f"Error generating portfolio: {e}")
             return []
@@ -1653,22 +1561,22 @@ class EnhancedSwingTradingSystem:
     # ========================================================================
     # CONVENIENCE METHODS
     # ========================================================================
-    
+
     def quick_analysis_top_stocks(self, max_stocks: int = 50, max_workers: int = 10) -> List[Dict]:
         """Quick analysis of top liquid stocks for fast demo"""
         top_liquid = [
-            "INFY", "ICICIBANK", "BAJFINANCE", "SBIN", "BHARTIARTL",
-            "KOTAKBANK", "LT", "MARUTI", "TITAN", "ASIANPAINT",
-            "HCLTECH", "AXISBANK", "WIPRO", "NTPC", "HINDUNILVR",
-            "SUNPHARMA", "ULTRACEMCO", "TECHM", "TATASTEEL", "POWERGRID",
-            "ONGC", "M&M", "HEROMOTOCO", "BAJAJ-AUTO", "GRASIM",
-            "CIPLA", "BRITANNIA", "IOC", "APOLLOHOSP", "ADANIPORTS",
-            "TATAMOTORS", "ITC", "DIVISLAB", "DRREDDY", "TATACONSUM",
-            "INDUSINDBK", "EICHERMOT", "COALINDIA", "HINDALCO", "JSWSTEEL",
-            "UPL", "BPCL", "NESTLEIND", "SHREECEM", "BAJAJFINSV",
-            "HDFCLIFE", "SBILIFE", "ADANIENT", "GODREJCP", "PIDILITIND"
-        ][:max_stocks]
-        
+                         "INFY", "ICICIBANK", "BAJFINANCE", "SBIN", "BHARTIARTL",
+                         "KOTAKBANK", "LT", "MARUTI", "TITAN", "ASIANPAINT",
+                         "HCLTECH", "AXISBANK", "WIPRO", "NTPC", "HINDUNILVR",
+                         "SUNPHARMA", "ULTRACEMCO", "TECHM", "TATASTEEL", "POWERGRID",
+                         "ONGC", "M&M", "HEROMOTOCO", "BAJAJ-AUTO", "GRASIM",
+                         "CIPLA", "BRITANNIA", "IOC", "APOLLOHOSP", "ADANIPORTS",
+                         "TATAMOTORS", "ITC", "DIVISLAB", "DRREDDY", "TATACONSUM",
+                         "INDUSINDBK", "EICHERMOT", "COALINDIA", "HINDALCO", "JSWSTEEL",
+                         "UPL", "BPCL", "NESTLEIND", "SHREECEM", "BAJAJFINSV",
+                         "HDFCLIFE", "SBILIFE", "ADANIENT", "GODREJCP", "PIDILITIND"
+                     ][:max_stocks]
+
         logger.info(f"⚡ Quick analysis: Top {len(top_liquid)} liquid stocks")
         return self.analyze_stocks_parallel(top_liquid, max_workers=max_workers)
 
@@ -1679,7 +1587,7 @@ class EnhancedSwingTradingSystem:
 
 class BackgroundAnalyzer:
     """Background worker to keep analysis cache fresh"""
-    
+
     def __init__(self, trading_system: EnhancedSwingTradingSystem, refresh_interval: int = 900):
         """
         Args:
@@ -1689,11 +1597,11 @@ class BackgroundAnalyzer:
         self.system = trading_system
         self.refresh_interval = refresh_interval
         self.running = False
-    
+
     def start(self):
         """Start background refresh (use with APScheduler or Celery in production)"""
         import threading
-        
+
         def worker():
             while self.running:
                 try:
@@ -1704,12 +1612,12 @@ class BackgroundAnalyzer:
                 except Exception as e:
                     logger.error(f"Background worker error: {e}")
                     time.sleep(60)  # Wait 1 min on error
-        
+
         self.running = True
         self.thread = threading.Thread(target=worker, daemon=True)
         self.thread.start()
         logger.info(f"✅ Background analyzer started (refresh every {self.refresh_interval}s)")
-    
+
     def stop(self):
         """Stop background refresh"""
         self.running = False
@@ -1724,7 +1632,7 @@ if __name__ == "__main__":
     import redis
     from data_providers import StockDataProvider
     from symbol_mapper import SymbolMapper
-    
+
     # Initialize dependencies
     mapper = SymbolMapper()
     data_provider = StockDataProvider(
@@ -1733,38 +1641,38 @@ if __name__ == "__main__":
         symbol_mapper=mapper,
         redis_url=config.REDIS_URL
     )
-    
+
     redis_client = redis.Redis.from_url(config.REDIS_URL) if hasattr(config, 'REDIS_URL') else None
-    
+
     # Initialize optimized system
     system = EnhancedSwingTradingSystem(
         data_provider=data_provider,
         redis_client=redis_client
     )
-    
-    print("\n" + "="*70)
+
+    print("\n" + "=" * 70)
     print("OPTIMIZED SWING TRADING SYSTEM - PRODUCTION MODE")
-    print("="*70)
+    print("=" * 70)
     print(f"Stock Universe: {len(system.get_all_stock_symbols())} stocks")
     print(f"Caching: {'✅ Enabled' if system.cache_enabled else '❌ Disabled'}")
     print(f"Parallel Processing: ✅ Enabled (10 workers)")
-    
+
     # Example 1: Quick analysis (fast for demos)
     print("\n📊 Quick Analysis (Top 50 liquid stocks)...")
     results = system.quick_analysis_top_stocks(max_stocks=50, max_workers=10)
     print(f"✅ Analyzed {len(results)} stocks")
-    
+
     # Example 2: Full universe analysis with caching
     print("\n🚀 Full Universe Analysis...")
     all_results = system.analyze_and_cache_all_stocks(max_workers=10)
     print(f"✅ Analyzed and cached {len(all_results)} stocks")
-    
+
     # Example 3: Get cached results (instant)
     print("\n⚡ Retrieving cached analysis...")
     cached = system.get_cached_batch_analysis(risk_appetite="MEDIUM")
     if cached:
         print(f"✅ Retrieved {len(cached)} stocks from cache (instant!)")
-    
+
     # Example 4: Generate portfolio
     if results:
         print("\n💼 Generating Portfolio...")
@@ -1774,7 +1682,7 @@ if __name__ == "__main__":
             risk_appetite="MEDIUM"
         )
         print(f"✅ Portfolio: {len(portfolio)} positions")
-        
+
         if portfolio:
             print("\n📋 Top 3 Positions:")
             for pos in portfolio[:3]:
@@ -1782,11 +1690,10 @@ if __name__ == "__main__":
                       f"Score: {pos['score']:.0f}  "
                       f"Allocation: {pos['allocation_pct']:.1f}%  "
                       f"Amount: ₹{pos['investment_amount']:,.0f}")
-    
-    print("\n" + "="*70)
-    print("✅ System ready for production use!")
-    print("="*70)
 
+    print("\n" + "=" * 70)
+    print("✅ System ready for production use!")
+    print("=" * 70)
 
 
 
