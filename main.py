@@ -70,6 +70,7 @@ class User(db.Model):
     failed_login_attempts = db.Column(db.Integer, nullable=False, default=0)
     locked_until         = db.Column(db.DateTime, nullable=True)
     is_active            = db.Column(db.Boolean, nullable=False, default=True)
+    google_id            = db.Column(db.String(128), nullable=True, unique=True)
     created_at           = db.Column(db.DateTime, default=datetime.utcnow)
     usages               = db.relationship('UserUsage', backref='user', lazy=True)
     audit_logs           = db.relationship('LoginAudit', backref='user', lazy=True)
@@ -811,7 +812,7 @@ class TradingAPI:
         if not self.swing_system:
             raise ConnectionAbortedError('Swing trading system not available')
         all_stocks  = _fetch_with_retry(self.swing_system.get_all_stock_symbols)
-        all_results = self.swing_system.analyze_stocks_parallel(all_stocks, max_workers=4)
+        all_results = self.swing_system.analyze_stocks_parallel(all_stocks)
         filtered    = self.swing_system.filter_stocks_by_risk_appetite(all_results, risk_appetite)
         portfolio_list = self.swing_system.generate_portfolio_allocation(filtered, budget, risk_appetite)
         std         = self._standardize_portfolio_keys(portfolio_list)
@@ -916,6 +917,80 @@ def verify_direct():
     db.session.commit()
     logger.info(f"[admin] Manually verified: {email}")
     return jsonify({'success': True, 'message': f'{email} verified.'})
+
+
+@v1.route('/auth/google', methods=['POST'])
+@limiter.limit("20 per minute")
+def google_auth():
+    """Google OAuth — create or find user by email, return JWT tokens."""
+    data      = request.get_json() or {}
+    email     = data.get('email', '').lower().strip()
+    name      = data.get('name', '').strip()
+    google_id = data.get('google_id', '').strip()
+
+    if not email or not google_id:
+        return jsonify({'success': False, 'error': 'Email and google_id required'}), 400
+
+    secret = os.getenv("JWT_SECRET")
+    if not secret:
+        return jsonify({'success': False, 'error': 'Server misconfigured'}), 500
+
+    try:
+        user = User.query.filter(
+            db.or_(User.email == email, User.google_id == google_id)
+        ).first()
+
+        if user:
+            if not user.google_id:
+                user.google_id   = google_id
+                user.is_verified = True
+                db.session.commit()
+        else:
+            user = User(
+                email         = email,
+                password_hash = hash_password(uuid.uuid4().hex),
+                plan          = 'FREE',
+                is_verified   = True,
+                google_id     = google_id,
+            )
+            db.session.add(user)
+            db.session.commit()
+            logger.info(f"{log_context()} New Google user: {email}")
+
+        if not user.is_active:
+            return jsonify({'success': False, 'error': 'Account disabled'}), 403
+
+        token_payload = {'email': email, 'user_id': user.id, 'plan': user.plan}
+        access_token  = jwt.encode(
+            {**token_payload, 'type': 'access', 'exp': datetime.utcnow() + timedelta(minutes=15)},
+            secret, algorithm="HS256"
+        )
+        refresh_token = jwt.encode(
+            {**token_payload, 'type': 'refresh', 'exp': datetime.utcnow() + timedelta(days=30)},
+            secret, algorithm="HS256"
+        )
+
+        log_audit(email, status='success', user_id=user.id)
+        logger.info(f"{log_context()} Google login: {email} (plan={user.plan})")
+
+        _login_ip         = request.headers.get('X-Forwarded-For', request.remote_addr or 'unknown').split(',')[0].strip()
+        _login_user_agent = request.headers.get('User-Agent', 'unknown')
+        _admin_email      = os.getenv('ADMIN_EMAIL') or os.getenv('SMTP_USER')
+        if _admin_email:
+            _executor.submit(_send_login_alert, _admin_email, email, _login_ip, _login_user_agent)
+
+        return jsonify({
+            'success':       True,
+            'access_token':  access_token,
+            'refresh_token': refresh_token,
+            'expires_in':    900,
+            'plan':          user.plan,
+            'user_id':       user.id,
+        })
+
+    except Exception as e:
+        logger.error(f"{log_context()} Google auth error: {e}")
+        return jsonify({'success': False, 'error': 'Authentication failed'}), 500
 
 
 @v1.route('/auth/login', methods=['POST'])
