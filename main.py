@@ -1389,6 +1389,76 @@ def analyze_swing_stock_endpoint(symbol):
     return analyze_stock('swing', symbol)
 
 
+@v1.route('/analyze/guest/<symbol>', methods=['GET'])
+@require_systems
+@limiter.limit("3 per day", key_func=get_remote_address)
+def analyze_guest_endpoint(symbol):
+    """Guest analysis — no auth required. 3 analyses per IP per day."""
+    try:
+        symbol = validate_symbol(symbol)
+        g.current_symbol = symbol
+
+        # Check guest daily limit via Redis (IP-based)
+        ip = request.headers.get('X-Forwarded-For', request.remote_addr or 'unknown').split(',')[0].strip()
+        guest_key = f"guest_limit:{ip}"
+
+        if redis_client:
+            try:
+                count = redis_client.get(guest_key)
+                count = int(count) if count else 0
+                if count >= 3:
+                    return jsonify({
+                        'success': False,
+                        'error': 'Guest limit reached. Sign up free for 10 analyses per day.',
+                        'code': 'GUEST_LIMIT_EXCEEDED',
+                    }), 429
+            except Exception as e:
+                logger.warning(f"Guest limit check failed: {e}")
+
+        # Try cache first
+        cache_key = f"swing_analysis_{symbol}"
+        if cached := get_from_cache(cache_key):
+            g.cache_hit = True
+            # Still increment guest counter even for cached results
+            if redis_client:
+                try:
+                    pipe = redis_client.pipeline()
+                    pipe.incr(guest_key)
+                    pipe.expire(guest_key, 86400)  # 24h TTL
+                    pipe.execute()
+                except Exception:
+                    pass
+            return jsonify({'success': True, 'data': cached, 'source': 'cache', 'guest': True})
+
+        # Live analysis
+        result = _fetch_with_retry(
+            trading_api.swing_system.analyze_swing_trading_stock, symbol
+        )
+        if not result:
+            return jsonify({'success': False, 'error': f'Could not analyze {symbol}'}), 404
+
+        formatted = trading_api.format_analysis_response(result, 'Swing')
+        set_cache(cache_key, formatted)
+
+        # Increment guest counter
+        if redis_client:
+            try:
+                pipe = redis_client.pipeline()
+                pipe.incr(guest_key)
+                pipe.expire(guest_key, 86400)
+                pipe.execute()
+            except Exception:
+                pass
+
+        return jsonify({'success': True, 'data': formatted, 'source': 'live', 'guest': True})
+
+    except ValueError as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
+    except Exception as e:
+        logger.error(f"{log_context()} analyze/guest/{symbol}: {e}")
+        return jsonify({'success': False, 'error': 'An internal server error occurred'}), 500
+
+
 @v1.route('/analyze/position/<symbol>', methods=['GET'])
 @token_required
 @check_daily_api_limit
