@@ -411,8 +411,13 @@ def track_usage_and_disclaimer(response):
         except Exception:
             pass
 
-    TRACKED_PATHS = ('/analyze/', '/portfolio/', '/compare/')
-    if any(p in request.path for p in TRACKED_PATHS) and request.method in ('GET', 'POST'):
+    # Track only actual API calls — exclude job polling and portfolio/start
+    # Portfolio counts as 1 call via _run_swing_job usage entry
+    TRACKED_PATHS = ('/analyze/', '/compare/')
+    EXCLUDED_PATHS = ('/portfolio/job/', '/portfolio/swing/start', '/portfolio/position/start')
+    is_tracked = any(p in request.path for p in TRACKED_PATHS)
+    is_excluded = any(p in request.path for p in EXCLUDED_PATHS)
+    if is_tracked and not is_excluded and request.method in ('GET', 'POST'):
         try:
             elapsed_ms = int((datetime.now() - g.request_start).total_seconds() * 1000) \
                          if hasattr(g, 'request_start') else None
@@ -562,7 +567,11 @@ def check_daily_api_limit(f):
                 count = db.session.query(UserUsage).filter(
                     UserUsage.user_id   == user_id,
                     UserUsage.timestamp >= today_start,
-                    UserUsage.cache_hit == False
+                    UserUsage.cache_hit == False,
+                    db.or_(
+                        UserUsage.endpoint.like('%/analyze/%'),
+                        UserUsage.endpoint.like('%/compare/%'),
+                    )
                 ).count()
 
                 if count >= limit:
