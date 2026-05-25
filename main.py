@@ -848,10 +848,31 @@ class TradingAPI:
         if not self.swing_system:
             raise ConnectionAbortedError('Swing trading system not available')
         all_stocks  = _fetch_with_retry(self.swing_system.get_all_stock_symbols)
-        all_results = self.swing_system.analyze_stocks_parallel(all_stocks)
+        all_results = self.swing_system.analyze_stocks_parallel(all_stocks, max_workers=4)
         filtered    = self.swing_system.filter_stocks_by_risk_appetite(all_results, risk_appetite)
         portfolio_list = self.swing_system.generate_portfolio_allocation(filtered, budget, risk_appetite)
         std         = self._standardize_portfolio_keys(portfolio_list)
+
+        # Enrich with targets from analysis results
+        results_map = {}
+        for r in all_results:
+            if r and r.get('symbol'):
+                sym = r['symbol'].replace('.NSE', '').replace('.BSE', '').upper()
+                results_map[sym] = r
+
+        for item in std:
+            sym = (item.get('symbol') or '').replace('.NSE', '').replace('.BSE', '').upper()
+            raw = results_map.get(sym)
+            if raw:
+                targets = raw.get('trading_plan', {}).get('targets', {})
+                item['target_1'] = targets.get('target_1') or 0
+                item['target_2'] = targets.get('target_2') or 0
+                item['target_3'] = targets.get('target_3') or 0
+            else:
+                item['target_1'] = 0
+                item['target_2'] = 0
+                item['target_3'] = 0
+
         total_alloc = sum(i.get('investment_amount', 0) for i in std)
         avg_score   = sum(i.get('score', 0) for i in std) / len(std) if std else 0
         return {'portfolio': std, 'summary': {
