@@ -760,11 +760,47 @@ class TradingAPI:
         if system_type == 'Position' and result.get('mda_analysis'):
             sentiment_data['mda_tone']  = result['mda_analysis'].get('tone')
             sentiment_data['mda_score'] = result['mda_analysis'].get('score')
-        cleaned_fundamentals = self._clean_fundamental_data(result.get('fundamentals', {}))
+        # Build technical indicators from raw swing result fields if not present
+        raw_technicals = result.get('technical_indicators', {})
+        if not raw_technicals:
+            raw_technicals = {}
+            # Flat fields
+            if result.get('rsi') is not None:
+                raw_technicals['rsi'] = result['rsi']
+            # Nested dict fields — flatten with prefix
+            for key, label in [
+                ('macd',              'MACD'),
+                ('bollinger_bands',   'Bollinger'),
+                ('stochastic',        'Stochastic'),
+                ('support_resistance','S/R'),
+                ('risk_metrics',      'Risk'),
+            ]:
+                val = result.get(key)
+                if isinstance(val, dict):
+                    for k, v in val.items():
+                        if v is not None:
+                            pretty = k.replace('_', ' ').title()
+                            raw_technicals[f"{label} {pretty}"] = v
+
         final_technicals = {
             k: (round(v, 2) if isinstance(v, (int, float)) else v)
-            for k, v in result.get('technical_indicators', {}).items()
+            for k, v in raw_technicals.items()
         }
+
+        # Build fundamentals from screener data if not present
+        raw_fundamentals = result.get('fundamentals', {})
+        if not raw_fundamentals:
+            raw_fundamentals = {}
+            for key in ['pe_ratio', 'pb_ratio', 'market_cap', 'revenue', 'profit',
+                        'debt_to_equity', 'roe', 'roce', 'dividend_yield', 'eps',
+                        'book_value', 'face_value', 'revenue_growth', 'profit_growth',
+                        'operating_margin', 'profit_margin', 'price_to_sales',
+                        'enterprise_value', 'current_ratio', 'interest_coverage']:
+                val = result.get(key)
+                if val is not None:
+                    raw_fundamentals[key] = val
+
+        cleaned_fundamentals = self._clean_fundamental_data(raw_fundamentals)
         return {
             'symbol':               result.get('symbol', 'N/A'),
             'company_name':         result.get('company_name', 'N/A'),
