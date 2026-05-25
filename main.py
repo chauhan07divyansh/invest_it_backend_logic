@@ -1448,7 +1448,7 @@ def analyze_swing_stock_endpoint(symbol):
 
 @v1.route('/analyze/guest/<symbol>', methods=['GET'])
 @require_systems
-@limiter.limit("3 per day", key_func=get_remote_address)
+@limiter.limit("1 per day", key_func=get_remote_address)
 def analyze_guest_endpoint(symbol):
     """Guest analysis — no auth required. 3 analyses per IP per day."""
     try:
@@ -1463,7 +1463,7 @@ def analyze_guest_endpoint(symbol):
             try:
                 count = redis_client.get(guest_key)
                 count = int(count) if count else 0
-                if count >= 3:
+                if count >= 1:
                     return jsonify({
                         'success': False,
                         'error': 'Guest limit reached. Sign up free for 10 analyses per day.',
