@@ -1465,7 +1465,15 @@ def analyze_guest_endpoint(symbol):
         g.current_symbol = symbol
 
         # Check guest daily limit via Redis (IP-based)
-        ip = request.headers.get('X-Forwarded-For', request.remote_addr or 'unknown').split(',')[0].strip()
+        # Cloudflare sets CF-Connecting-IP to the real visitor IP
+        # X-Forwarded-For may contain Cloudflare's own IPs — use CF-Connecting-IP first
+        ip = (
+            request.headers.get('CF-Connecting-IP') or
+            request.headers.get('X-Real-IP') or
+            request.headers.get('X-Forwarded-For', '').split(',')[0].strip() or
+            request.remote_addr or
+            'unknown'
+        ).strip()
         guest_key = f"guest_limit:{ip}"
 
         if redis_client:
@@ -1479,7 +1487,8 @@ def analyze_guest_endpoint(symbol):
                         'code': 'GUEST_LIMIT_EXCEEDED',
                     }), 429
             except Exception as e:
-                logger.warning(f"Guest limit check failed: {e}")
+                # Redis unavailable — fail open, allow the request through
+                logger.warning(f"Guest limit check failed (Redis down), allowing request: {e}")
 
         # Try cache first
         cache_key = f"swing_analysis_{symbol}"
