@@ -1457,7 +1457,6 @@ def analyze_swing_stock_endpoint(symbol):
 
 @v1.route('/analyze/guest/<symbol>', methods=['GET'])
 @require_systems
-@limiter.limit("1 per day", key_func=get_remote_address)
 def analyze_guest_endpoint(symbol):
     """Guest analysis — no auth required. 3 analyses per IP per day."""
     try:
@@ -1499,7 +1498,7 @@ def analyze_guest_endpoint(symbol):
                 try:
                     pipe = redis_client.pipeline()
                     pipe.incr(guest_key)
-                    pipe.expire(guest_key, 86400)  # 24h TTL
+                    # No TTL — guest limit is permanent until signup
                     pipe.execute()
                 except Exception:
                     pass
