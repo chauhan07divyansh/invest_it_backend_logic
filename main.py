@@ -17,9 +17,7 @@ from functools import wraps
 import logging
 from datetime import datetime, timedelta
 import traceback
-
 import jwt
-
 # NEW-5: passlib with argon2 (bcrypt kept as upgrade fallback)
 try:
     from passlib.context import CryptContext
@@ -33,9 +31,7 @@ try:
 except ImportError:
     import bcrypt
     PASSLIB_AVAILABLE = False
-
 from services.data_providers.stock_data_provider import StockDataProvider
-
 # ── Trading system import ─────────────────────────────────────────────────────
 SYSTEMS_AVAILABLE = False
 try:
@@ -44,37 +40,30 @@ try:
     SYSTEMS_AVAILABLE = True
 except ImportError as e:
     logging.critical(f"Could not import trading systems: {e}. API running in degraded mode.")
-
 # ── App setup ─────────────────────────────────────────────────────────────────
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
-
 # ── Database ──────────────────────────────────────────────────────────────────
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'sqlite:///sentiquant.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
-
-
 # ── DB Models ─────────────────────────────────────────────────────────────────
-
 class User(db.Model):
     __tablename__ = 'users'
-    id                   = db.Column(db.Integer, primary_key=True)
-    email                = db.Column(db.String(255), unique=True, nullable=False, index=True)
-    password_hash        = db.Column(db.String(512), nullable=False)
-    plan                 = db.Column(db.String(20), nullable=False, default='FREE')
-    is_verified          = db.Column(db.Boolean, nullable=False, default=False)
-    verify_token         = db.Column(db.String(64), nullable=True)
-    # ── Account lockout (ported from Node.js auth) ────────────────────────────
+    id                    = db.Column(db.Integer, primary_key=True)
+    email                 = db.Column(db.String(255), unique=True, nullable=False, index=True)
+    password_hash         = db.Column(db.String(512), nullable=False)
+    plan                  = db.Column(db.String(20), nullable=False, default='FREE')
+    is_verified           = db.Column(db.Boolean, nullable=False, default=False)
+    verify_token          = db.Column(db.String(64), nullable=True)
     failed_login_attempts = db.Column(db.Integer, nullable=False, default=0)
-    locked_until         = db.Column(db.DateTime, nullable=True)
-    is_active            = db.Column(db.Boolean, nullable=False, default=True)
-    google_id            = db.Column(db.String(128), nullable=True, unique=True)
-    created_at           = db.Column(db.DateTime, default=datetime.utcnow)
-    usages               = db.relationship('UserUsage', backref='user', lazy=True)
-    audit_logs           = db.relationship('LoginAudit', backref='user', lazy=True)
-
+    locked_until          = db.Column(db.DateTime, nullable=True)
+    is_active             = db.Column(db.Boolean, nullable=False, default=True)
+    google_id             = db.Column(db.String(128), nullable=True, unique=True)
+    created_at            = db.Column(db.DateTime, default=datetime.utcnow)
+    usages                = db.relationship('UserUsage', backref='user', lazy=True)
+    audit_logs            = db.relationship('LoginAudit', backref='user', lazy=True)
 
 class UserUsage(db.Model):
     __tablename__ = 'user_usage'
@@ -87,8 +76,6 @@ class UserUsage(db.Model):
     cache_hit      = db.Column(db.Boolean, nullable=False, default=False)
     timestamp      = db.Column(db.DateTime, default=datetime.utcnow, index=True)
 
-
-# ── Login audit log (ported from Node.js auth) ────────────────────────────────
 class LoginAudit(db.Model):
     __tablename__ = 'login_audit'
     id             = db.Column(db.Integer, primary_key=True)
@@ -96,15 +83,12 @@ class LoginAudit(db.Model):
     email          = db.Column(db.String(255), nullable=False)
     ip_address     = db.Column(db.String(64), nullable=True)
     user_agent     = db.Column(db.Text, nullable=True)
-    status         = db.Column(db.String(20), nullable=False)   # success | failed | locked
+    status         = db.Column(db.String(20), nullable=False)
     failure_reason = db.Column(db.String(100), nullable=True)
     created_at     = db.Column(db.DateTime, default=datetime.utcnow, index=True)
 
-
 with app.app_context():
     db.create_all()
-
-
 # ── Rate limiter ──────────────────────────────────────────────────────────────
 limiter = Limiter(
     get_remote_address,
@@ -112,7 +96,6 @@ limiter = Limiter(
     default_limits=["300 per day", "60 per hour"],
     storage_uri=os.getenv("LIMITER_STORAGE", "memory://")
 )
-
 # ── CORS ──────────────────────────────────────────────────────────────────────
 ALLOWED_ORIGINS = [
     "http://localhost:3000",
@@ -122,7 +105,6 @@ ALLOWED_ORIGINS = [
     "https://sentiquant-frontend.onrender.com"
 ]
 CORS(app, resources={r"/api/*": {"origins": ALLOWED_ORIGINS}}, supports_credentials=True)
-
 # ── SEBI Disclaimer ───────────────────────────────────────────────────────────
 SEBI_DISCLAIMER = {
     "text": (
@@ -139,25 +121,20 @@ SEBI_DISCLAIMER = {
     "version": "2.0",
     "last_updated": "2026-04-30"
 }
-
 # ── Plan limits ───────────────────────────────────────────────────────────────
 PLAN_LIMITS = {
     'FREE':       {'analyze': True,  'portfolio': True,  'compare': False, 'daily_calls': 10,  'portfolio_per_day': 1},
     'PRO':        {'analyze': True,  'portfolio': True,  'compare': True,  'daily_calls': 500, 'portfolio_per_day': 999},
     'ENTERPRISE': {'analyze': True,  'portfolio': True,  'compare': True,  'daily_calls': 999999, 'portfolio_per_day': 999},
 }
-
 # ── Account lockout config ────────────────────────────────────────────────────
-MAX_FAILED_ATTEMPTS     = 5
+MAX_FAILED_ATTEMPTS      = 5
 LOCKOUT_DURATION_MINUTES = 15
-
 # ── Redis cache ───────────────────────────────────────────────────────────────
 CACHE_TIMEOUT  = 300
 PRECOMPUTE_TTL = 86400
-
 redis_client = None
 simple_cache = {}
-
 if os.getenv("REDIS_URL"):
     try:
         redis_client = redis.from_url(os.getenv("REDIS_URL"), decode_responses=True)
@@ -165,7 +142,6 @@ if os.getenv("REDIS_URL"):
         logger.info("✅ Redis connected.")
     except Exception as e:
         logger.warning(f"Redis failed, using in-memory cache: {e}")
-
 
 def get_from_cache(key: str):
     if redis_client:
@@ -182,7 +158,6 @@ def get_from_cache(key: str):
         del simple_cache[key]
     return None
 
-
 def set_cache(key: str, value, ttl: int = CACHE_TIMEOUT):
     if redis_client:
         try:
@@ -191,25 +166,20 @@ def set_cache(key: str, value, ttl: int = CACHE_TIMEOUT):
         except Exception as e:
             logger.warning(f"Redis SET '{key}': {e}")
     simple_cache[key] = (value, datetime.now().timestamp())
-
-
-# ── Token blacklist helpers (ported from Node.js auth) ────────────────────────
+# ── Token blacklist helpers ───────────────────────────────────────────────────
 BLACKLIST_PREFIX = "blacklist:token:"
-BLACKLIST_TTL    = 15 * 60  # matches JWT access token lifetime (15 min)
+BLACKLIST_TTL    = 15 * 60
 
 def blacklist_token(token: str):
-    """Add an access token to the blacklist so it can't be reused after logout."""
     if redis_client:
         try:
             redis_client.setex(f"{BLACKLIST_PREFIX}{token}", BLACKLIST_TTL, "1")
         except Exception as e:
             logger.warning(f"Token blacklist SET failed: {e}")
     else:
-        # In-memory fallback (single instance only)
         set_cache(f"{BLACKLIST_PREFIX}{token}", "1", BLACKLIST_TTL)
 
 def is_token_blacklisted(token: str) -> bool:
-    """Returns True if the token has been blacklisted (user logged out)."""
     if redis_client:
         try:
             return bool(redis_client.exists(f"{BLACKLIST_PREFIX}{token}"))
@@ -218,13 +188,10 @@ def is_token_blacklisted(token: str) -> bool:
             return False
     return get_from_cache(f"{BLACKLIST_PREFIX}{token}") is not None
 
-
 _executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
-
 
 def get_precomputed(system_type: str, symbol: str):
     return get_from_cache(f"pre_{system_type}_{symbol}")
-
 
 def _fetch_with_retry(func, *args, **kwargs):
     @backoff.on_exception(
@@ -240,37 +207,28 @@ def _fetch_with_retry(func, *args, **kwargs):
     def _inner():
         return func(*args, **kwargs)
     return _inner()
-
-
 # ── Password helpers ──────────────────────────────────────────────────────────
-
 def hash_password(plain: str) -> str:
     if PASSLIB_AVAILABLE:
         return pwd_context.hash(plain)
     return bcrypt.hashpw(plain.encode(), bcrypt.gensalt()).decode()
-
 
 def verify_password(plain: str, hashed: str) -> bool:
     if PASSLIB_AVAILABLE:
         return pwd_context.verify(plain, hashed)
     return bcrypt.checkpw(plain.encode(), hashed.encode())
 
-
 def password_needs_rehash(hashed: str) -> bool:
     if PASSLIB_AVAILABLE:
         return pwd_context.needs_update(hashed)
     return False
-
-
-# ── Account lockout helpers (ported from Node.js auth) ───────────────────────
-
+# ── Account lockout helpers ───────────────────────────────────────────────────
 def is_account_locked(user) -> bool:
     if not user.locked_until:
         return False
     return user.locked_until > datetime.utcnow()
 
 def record_failed_attempt(user):
-    """Increment failed attempts and lock account if threshold reached."""
     user.failed_login_attempts += 1
     if user.failed_login_attempts >= MAX_FAILED_ATTEMPTS:
         user.locked_until = datetime.utcnow() + timedelta(minutes=LOCKOUT_DURATION_MINUTES)
@@ -279,16 +237,11 @@ def record_failed_attempt(user):
     return user.failed_login_attempts
 
 def reset_failed_attempts(user):
-    """Reset lockout state after successful login."""
     user.failed_login_attempts = 0
     user.locked_until = None
     db.session.commit()
-
-
-# ── Audit log helper (ported from Node.js auth) ───────────────────────────────
-
+# ── Audit log helper ──────────────────────────────────────────────────────────
 def log_audit(email, status, failure_reason=None, user_id=None):
-    """Record every login attempt — success or failure."""
     try:
         ip         = request.headers.get('X-Forwarded-For', request.remote_addr or 'unknown').split(',')[0].strip()
         user_agent = request.headers.get('User-Agent', 'unknown')
@@ -304,28 +257,21 @@ def log_audit(email, status, failure_reason=None, user_id=None):
         db.session.commit()
     except Exception as e:
         logger.warning(f"Audit log failed: {e}")
-
-
-# ── Email verification helpers ────────────────────────────────────────────────
-
+# ── Email helpers ─────────────────────────────────────────────────────────────
 def _send_verification_email(to_email: str, token: str):
-    base_url = os.getenv("APP_BASE_URL", "http://localhost:5000")
-    link = f"{base_url}/api/v1/auth/verify-email?token={token}"
-
+    base_url  = os.getenv("APP_BASE_URL", "http://localhost:5000")
+    link      = f"{base_url}/api/v1/auth/verify-email?token={token}"
     smtp_host = os.getenv("SMTP_HOST")
     if not smtp_host:
         logger.info(f"[DEV] Email verification link for {to_email}: {link}")
         return
-
     msg = MIMEText(
         f"Welcome to SentiQuant!\n\nVerify your email by clicking:\n{link}\n\n"
-        f"This link expires in 24 hours.",
-        "plain"
+        f"This link expires in 24 hours.", "plain"
     )
     msg["Subject"] = "Verify your SentiQuant account"
     msg["From"]    = os.getenv("SMTP_USER")
     msg["To"]      = to_email
-
     try:
         with smtplib.SMTP(smtp_host, int(os.getenv("SMTP_PORT", 587))) as server:
             server.starttls()
@@ -335,13 +281,10 @@ def _send_verification_email(to_email: str, token: str):
     except Exception as e:
         logger.error(f"Failed to send verification email to {to_email}: {e}")
 
-
 def _send_login_alert(admin_email: str, user_email: str, ip: str, user_agent: str):
-    """Send a login alert email to the admin inbox on every successful login."""
     smtp_host = os.getenv("SMTP_HOST")
     if not smtp_host or not admin_email:
         return
-
     timestamp = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')
     html = f"""
     <div style="font-family:sans-serif;max-width:600px;margin:0 auto;background:#0f1117;color:#fff;border-radius:12px;overflow:hidden">
@@ -358,9 +301,7 @@ def _send_login_alert(admin_email: str, user_email: str, ip: str, user_agent: st
           <tr><td style="color:#8b8fa8;padding:8px 0">Device</td><td style="color:#fff;font-size:12px">{user_agent[:120]}</td></tr>
           <tr><td style="color:#8b8fa8;padding:8px 0">Time</td><td style="color:#fff">{timestamp}</td></tr>
         </table>
-        <p style="color:#8b8fa8;font-size:13px;margin-top:24px">
-          If this was not you, investigate immediately at your Render dashboard.
-        </p>
+        <p style="color:#8b8fa8;font-size:13px;margin-top:24px">If this was not you, investigate immediately at your Render dashboard.</p>
       </div>
       <div style="padding:16px 32px;border-top:1px solid #1e2130;text-align:center">
         <p style="color:#8b8fa8;font-size:12px;margin:0">SentiQuant &mdash; AI Stock Analysis Platform</p>
@@ -371,7 +312,6 @@ def _send_login_alert(admin_email: str, user_email: str, ip: str, user_agent: st
     msg['Subject'] = f'🔐 Login Alert: {user_email} signed in'
     msg['From']    = os.getenv("SMTP_USER")
     msg['To']      = admin_email
-
     try:
         with smtplib.SMTP(smtp_host, int(os.getenv("SMTP_PORT", 587))) as server:
             server.starttls()
@@ -380,10 +320,7 @@ def _send_login_alert(admin_email: str, user_email: str, ip: str, user_agent: st
         logger.info(f"Login alert sent for {user_email}")
     except Exception as e:
         logger.error(f"Failed to send login alert for {user_email}: {e}")
-
-
 # ── Request lifecycle hooks ───────────────────────────────────────────────────
-
 @app.before_request
 def attach_request_id():
     g.request_id     = str(uuid.uuid4())[:8]
@@ -394,10 +331,8 @@ def attach_request_id():
     g.current_symbol = None
     g.request_start  = datetime.now()
 
-
 def log_context():
     return f"[{getattr(g, 'request_id', '?')}] [{getattr(g, 'user_email', 'anon')}]"
-
 
 @app.after_request
 def track_usage_and_disclaimer(response):
@@ -410,33 +345,28 @@ def track_usage_and_disclaimer(response):
                 response.content_type = 'application/json'
         except Exception:
             pass
-
-    # Track only actual API calls — exclude job polling and portfolio/start
-    # Portfolio counts as 1 call via _run_swing_job usage entry
-    TRACKED_PATHS = ('/analyze/', '/compare/')
+    TRACKED_PATHS  = ('/analyze/', '/compare/')
     EXCLUDED_PATHS = ('/portfolio/job/', '/portfolio/swing/start', '/portfolio/position/start')
-    is_tracked = any(p in request.path for p in TRACKED_PATHS)
+    is_tracked  = any(p in request.path for p in TRACKED_PATHS)
     is_excluded = any(p in request.path for p in EXCLUDED_PATHS)
     if is_tracked and not is_excluded and request.method in ('GET', 'POST'):
         try:
             elapsed_ms = int((datetime.now() - g.request_start).total_seconds() * 1000) \
                          if hasattr(g, 'request_start') else None
-            cost = 0.0 if getattr(g, 'cache_hit', False) else _estimate_cost(request.path)
+            cost  = 0.0 if getattr(g, 'cache_hit', False) else _estimate_cost(request.path)
             usage = UserUsage(
-                user_id      = getattr(g, 'user_id', None),
-                endpoint     = request.path,
-                symbol       = getattr(g, 'current_symbol', None),
-                cost_estimate= cost,
-                response_ms  = elapsed_ms,
-                cache_hit    = getattr(g, 'cache_hit', False),
+                user_id       = getattr(g, 'user_id', None),
+                endpoint      = request.path,
+                symbol        = getattr(g, 'current_symbol', None),
+                cost_estimate = cost,
+                response_ms   = elapsed_ms,
+                cache_hit     = getattr(g, 'cache_hit', False),
             )
             db.session.add(usage)
             db.session.commit()
         except Exception as e:
             logger.debug(f"Usage tracking failed: {e}")
-
     return response
-
 
 def _estimate_cost(path: str) -> float:
     if '/analyze/' in path or '/compare/' in path:
@@ -444,17 +374,13 @@ def _estimate_cost(path: str) -> float:
     if '/portfolio/' in path:
         return 2.0
     return 0.1
-
-
 # ── JWT helpers ───────────────────────────────────────────────────────────────
-
 def decode_token(token):
     secret = os.getenv("JWT_SECRET")
     if not secret:
         raise RuntimeError("Server misconfigured: JWT_SECRET is missing")
     return jwt.decode(token, secret, algorithms=["HS256"],
                       options={"verify_aud": False, "verify_iss": False})
-
 
 def token_required(f):
     @wraps(f)
@@ -467,11 +393,8 @@ def token_required(f):
                 return jsonify({'success': False, 'error': 'Malformed authorization header'}), 401
         if not token:
             return jsonify({'success': False, 'error': 'Token is missing'}), 401
-
-        # AUTH: Check blacklist first (handles logout-before-expiry)
         if is_token_blacklisted(token):
             return jsonify({'success': False, 'error': 'Token has been revoked. Please log in again.'}), 401
-
         try:
             payload = decode_token(token)
             if payload.get('type') == 'refresh':
@@ -492,7 +415,6 @@ def token_required(f):
         return f(*args, **kwargs)
     return decorated
 
-
 def plan_required(feature: str):
     def decorator(f):
         @wraps(f)
@@ -509,7 +431,6 @@ def plan_required(feature: str):
         return decorated
     return decorator
 
-
 def require_systems(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -521,14 +442,12 @@ def require_systems(f):
         return f(*args, **kwargs)
     return decorated
 
-
 def check_portfolio_daily_limit(f):
     @wraps(f)
     def decorated(*args, **kwargs):
         plan    = getattr(g, 'user_plan', 'FREE')
         user_id = getattr(g, 'user_id', None)
         limit   = PLAN_LIMITS.get(plan, PLAN_LIMITS['FREE']).get('portfolio_per_day', 1)
-
         if limit < 999 and user_id:
             try:
                 today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
@@ -538,7 +457,6 @@ def check_portfolio_daily_limit(f):
                     UserUsage.timestamp >= today_start,
                     UserUsage.cache_hit == False
                 ).count()
-
                 if count >= limit:
                     return jsonify({
                         'success': False,
@@ -548,19 +466,15 @@ def check_portfolio_daily_limit(f):
                     }), 429
             except Exception as e:
                 logger.warning(f"{log_context()} Portfolio limit check failed: {e}")
-
         return f(*args, **kwargs)
     return decorated
 
-
 def check_daily_api_limit(f):
-    """Blocks requests when the user has exceeded their daily API call limit."""
     @wraps(f)
     def decorated(*args, **kwargs):
         user_id = getattr(g, 'user_id', None)
         plan    = getattr(g, 'user_plan', 'FREE')
         limit   = PLAN_LIMITS.get(plan, PLAN_LIMITS['FREE']).get('daily_calls', 10)
-
         if limit < 999999 and user_id:
             try:
                 today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
@@ -573,7 +487,6 @@ def check_daily_api_limit(f):
                         UserUsage.endpoint.like('%/compare/%'),
                     )
                 ).count()
-
                 if count >= limit:
                     return jsonify({
                         'success': False,
@@ -584,13 +497,9 @@ def check_daily_api_limit(f):
                     }), 429
             except Exception as e:
                 logger.warning(f"{log_context()} Daily limit check failed: {e}")
-
         return f(*args, **kwargs)
     return decorated
-
-
 # ── Validation helpers ────────────────────────────────────────────────────────
-
 NSE_SYMBOLS = set()
 try:
     with open("nse_symbols.txt") as f:
@@ -599,7 +508,6 @@ try:
 except FileNotFoundError:
     logger.warning("nse_symbols.txt missing — symbol allowlist DISABLED.")
 
-
 def validate_symbol(symbol):
     if not isinstance(symbol, str) or not symbol.strip():
         raise ValueError("Symbol must be a non-empty string")
@@ -607,7 +515,6 @@ def validate_symbol(symbol):
     if NSE_SYMBOLS and symbol not in NSE_SYMBOLS:
         raise ValueError(f"'{symbol}' is not a recognised NSE symbol")
     return symbol
-
 
 def validate_budget(budget):
     try:
@@ -618,12 +525,10 @@ def validate_budget(budget):
     except (TypeError, ValueError):
         raise ValueError("Budget must be a valid number")
 
-
 def validate_risk_appetite(risk):
     if not isinstance(risk, str) or risk.upper() not in ['LOW', 'MEDIUM', 'HIGH']:
         raise ValueError("Risk appetite must be LOW, MEDIUM, or HIGH")
     return risk.upper()
-
 
 def validate_time_period(tp):
     try:
@@ -633,10 +538,7 @@ def validate_time_period(tp):
         return tp
     except (TypeError, ValueError):
         raise ValueError("Time period must be a valid integer")
-
-
 # ── TradingAPI class ──────────────────────────────────────────────────────────
-
 class TradingAPI:
     def __init__(self):
         self.swing_system    = None
@@ -720,7 +622,6 @@ class TradingAPI:
             return self._fallback_trading_plan(result)
 
     def _normalize_signal(self, signal: str) -> str:
-        """Normalize signal strings to standard BUY/HOLD/SELL that frontend classifySignal() handles."""
         s = signal.upper().strip()
         if 'STRONG BUY'  in s or 'STRONG_BUY'  in s: return 'STRONG BUY'
         if 'BUY'         in s:                         return 'BUY'
@@ -729,7 +630,7 @@ class TradingAPI:
         if 'AVOID'       in s:                         return 'SELL'
         if 'HOLD'        in s or 'WATCH' in s:         return 'HOLD/WATCH'
         if 'NO SIGNAL'   in s or 'NO_SIGNAL' in s:     return 'HOLD/WATCH'
-        return 'HOLD/WATCH'  # safe default
+        return 'HOLD/WATCH'
 
     def _enhance_strategy_description(self, base_strategy, signal, system_type):
         s = signal.lower()
@@ -769,14 +670,11 @@ class TradingAPI:
         if system_type == 'Position' and result.get('mda_analysis'):
             sentiment_data['mda_tone']  = result['mda_analysis'].get('tone')
             sentiment_data['mda_score'] = result['mda_analysis'].get('score')
-        # Build technical indicators from raw swing result fields if not present
         raw_technicals = result.get('technical_indicators', {})
         if not raw_technicals:
             raw_technicals = {}
-            # Flat fields
             if result.get('rsi') is not None:
                 raw_technicals['rsi'] = result['rsi']
-            # Nested dict fields — flatten with prefix
             for key, label in [
                 ('macd',              'MACD'),
                 ('bollinger_bands',   'Bollinger'),
@@ -790,13 +688,10 @@ class TradingAPI:
                         if v is not None:
                             pretty = k.replace('_', ' ').title()
                             raw_technicals[f"{label} {pretty}"] = v
-
         final_technicals = {
             k: (round(v, 2) if isinstance(v, (int, float)) else v)
             for k, v in raw_technicals.items()
         }
-
-        # Build fundamentals from screener data if not present
         raw_fundamentals = result.get('fundamentals', {})
         if not raw_fundamentals:
             raw_fundamentals = {}
@@ -808,7 +703,6 @@ class TradingAPI:
                 val = result.get(key)
                 if val is not None:
                     raw_fundamentals[key] = val
-
         cleaned_fundamentals = self._clean_fundamental_data(raw_fundamentals)
         return {
             'symbol':               result.get('symbol', 'N/A'),
@@ -856,19 +750,16 @@ class TradingAPI:
     def generate_swing_portfolio(self, budget, risk_appetite):
         if not self.swing_system:
             raise ConnectionAbortedError('Swing trading system not available')
-        all_stocks  = _fetch_with_retry(self.swing_system.get_all_stock_symbols)
-        all_results = self.swing_system.analyze_stocks_parallel(all_stocks, max_workers=4)
-        filtered    = self.swing_system.filter_stocks_by_risk_appetite(all_results, risk_appetite)
+        all_stocks     = _fetch_with_retry(self.swing_system.get_all_stock_symbols)
+        all_results    = self.swing_system.analyze_stocks_parallel(all_stocks, max_workers=4)
+        filtered       = self.swing_system.filter_stocks_by_risk_appetite(all_results, risk_appetite)
         portfolio_list = self.swing_system.generate_portfolio_allocation(filtered, budget, risk_appetite)
-        std         = self._standardize_portfolio_keys(portfolio_list)
-
-        # Enrich with targets from analysis results
-        results_map = {}
+        std            = self._standardize_portfolio_keys(portfolio_list)
+        results_map    = {}
         for r in all_results:
             if r and r.get('symbol'):
                 sym = r['symbol'].replace('.NSE', '').replace('.BSE', '').upper()
                 results_map[sym] = r
-
         for item in std:
             sym = (item.get('symbol') or '').replace('.NSE', '').replace('.BSE', '').upper()
             raw = results_map.get(sym)
@@ -881,7 +772,6 @@ class TradingAPI:
                 item['target_1'] = 0
                 item['target_2'] = 0
                 item['target_3'] = 0
-
         total_alloc = sum(i.get('investment_amount', 0) for i in std)
         avg_score   = sum(i.get('score', 0) for i in std) / len(std) if std else 0
         return {'portfolio': std, 'summary': {
@@ -903,17 +793,10 @@ class TradingAPI:
             'total_budget': budget, 'total_allocated': total_alloc,
             'remaining_cash': budget - total_alloc, 'diversification': len(std), 'average_score': avg_score}}
 
-
 trading_api = TradingAPI()
-
-
 # ── Blueprint v1 ──────────────────────────────────────────────────────────────
-
 v1 = Blueprint('v1', __name__, url_prefix='/api/v1')
-
-
-# ── Auth ──────────────────────────────────────────────────────────────────────
-
+# ── Auth endpoints ────────────────────────────────────────────────────────────
 @v1.route('/auth/register', methods=['POST'])
 @limiter.limit("10 per hour")
 def register():
@@ -928,29 +811,18 @@ def register():
     if existing:
         if existing.is_verified:
             return jsonify({'success': False, 'error': 'User already exists'}), 409
-        # Unverified account — resend verification with a fresh token
         existing.verify_token = uuid.uuid4().hex
         db.session.commit()
         _executor.submit(_send_verification_email, email, existing.verify_token)
-        return jsonify({
-            'success': True,
-            'message': 'Registered successfully. Please check your email to verify your account.'
-        }), 201
-
+        return jsonify({'success': True, 'message': 'Registered successfully. Please check your email to verify your account.'}), 201
     hashed       = hash_password(password)
     verify_token = uuid.uuid4().hex
     user = User(email=email, password_hash=hashed, verify_token=verify_token)
     db.session.add(user)
     db.session.commit()
-
     _executor.submit(_send_verification_email, email, verify_token)
-
     logger.info(f"{log_context()} Registered: {email}")
-    return jsonify({
-        'success': True,
-        'message': 'Registered successfully. Please check your email to verify your account.'
-    }), 201
-
+    return jsonify({'success': True, 'message': 'Registered successfully. Please check your email to verify your account.'}), 201
 
 @v1.route('/auth/verify-email', methods=['GET'])
 def verify_email():
@@ -965,11 +837,8 @@ def verify_email():
     db.session.commit()
     return jsonify({'success': True, 'message': 'Email verified. You can now log in.'})
 
-
-# ── TEMPORARY: Direct verify endpoint (remove after initial setup) ─────────────
 @v1.route('/auth/verify-direct', methods=['POST'])
 def verify_direct():
-    """TEMPORARY: Direct email verification without token. Remove after setup."""
     admin_key = request.headers.get('X-Admin-Key', '')
     if admin_key != os.getenv('ADMIN_KEY', ''):
         return jsonify({'success': False, 'error': 'Unauthorized'}), 401
@@ -984,28 +853,20 @@ def verify_direct():
     logger.info(f"[admin] Manually verified: {email}")
     return jsonify({'success': True, 'message': f'{email} verified.'})
 
-
 @v1.route('/auth/google', methods=['POST'])
 @limiter.limit("20 per minute")
 def google_auth():
-    """Google OAuth — create or find user by email, return JWT tokens."""
     data      = request.get_json() or {}
     email     = data.get('email', '').lower().strip()
     name      = data.get('name', '').strip()
     google_id = data.get('google_id', '').strip()
-
     if not email or not google_id:
         return jsonify({'success': False, 'error': 'Email and google_id required'}), 400
-
     secret = os.getenv("JWT_SECRET")
     if not secret:
         return jsonify({'success': False, 'error': 'Server misconfigured'}), 500
-
     try:
-        user = User.query.filter(
-            db.or_(User.email == email, User.google_id == google_id)
-        ).first()
-
+        user = User.query.filter(db.or_(User.email == email, User.google_id == google_id)).first()
         if user:
             if not user.google_id:
                 user.google_id   = google_id
@@ -1022,10 +883,8 @@ def google_auth():
             db.session.add(user)
             db.session.commit()
             logger.info(f"{log_context()} New Google user: {email}")
-
         if not user.is_active:
             return jsonify({'success': False, 'error': 'Account disabled'}), 403
-
         token_payload = {'email': email, 'user_id': user.id, 'plan': user.plan}
         access_token  = jwt.encode(
             {**token_payload, 'type': 'access', 'exp': datetime.utcnow() + timedelta(minutes=15)},
@@ -1035,29 +894,20 @@ def google_auth():
             {**token_payload, 'type': 'refresh', 'exp': datetime.utcnow() + timedelta(days=30)},
             secret, algorithm="HS256"
         )
-
         log_audit(email, status='success', user_id=user.id)
         logger.info(f"{log_context()} Google login: {email} (plan={user.plan})")
-
         _login_ip         = request.headers.get('X-Forwarded-For', request.remote_addr or 'unknown').split(',')[0].strip()
         _login_user_agent = request.headers.get('User-Agent', 'unknown')
         _admin_email      = os.getenv('ADMIN_EMAIL') or os.getenv('SMTP_USER')
         if _admin_email:
             _executor.submit(_send_login_alert, _admin_email, email, _login_ip, _login_user_agent)
-
         return jsonify({
-            'success':       True,
-            'access_token':  access_token,
-            'refresh_token': refresh_token,
-            'expires_in':    900,
-            'plan':          user.plan,
-            'user_id':       user.id,
+            'success': True, 'access_token': access_token, 'refresh_token': refresh_token,
+            'expires_in': 900, 'plan': user.plan, 'user_id': user.id,
         })
-
     except Exception as e:
         logger.error(f"{log_context()} Google auth error: {e}")
         return jsonify({'success': False, 'error': 'Authentication failed'}), 500
-
 
 @v1.route('/auth/login', methods=['POST'])
 @limiter.limit("10 per minute", key_func=lambda: (request.get_json(silent=True) or {}).get('email', get_remote_address()))
@@ -1069,35 +919,25 @@ def login():
     if not secret:
         logger.critical("JWT_SECRET not set!")
         return jsonify({'success': False, 'error': 'Server misconfigured'}), 500
-
     user = User.query.filter_by(email=email).first()
-
-    # AUTH: User not found — same error as wrong password (prevent email enumeration)
     if not user:
         log_audit(email, status='failed', failure_reason='user_not_found')
         return jsonify({'success': False, 'error': 'Invalid credentials'}), 401
-
-    # AUTH: Account locked?
     if is_account_locked(user):
         minutes_left = int((user.locked_until - datetime.utcnow()).total_seconds() / 60) + 1
         log_audit(email, status='locked', failure_reason='account_locked', user_id=user.id)
         logger.warning(f"{log_context()} Login blocked — account locked: {email}")
         return jsonify({
             'success': False,
-            'error':   f'Account temporarily locked due to too many failed attempts. '
-                       f'Try again in {minutes_left} minute(s).',
+            'error':   f'Account temporarily locked due to too many failed attempts. Try again in {minutes_left} minute(s).',
             'code':    'ACCOUNT_LOCKED',
             'locked_until': user.locked_until.isoformat(),
         }), 423
-
-    # AUTH: Account disabled?
     if not user.is_active:
         log_audit(email, status='failed', failure_reason='account_disabled', user_id=user.id)
         return jsonify({'success': False, 'error': 'Account is disabled. Please contact support.'}), 403
-
-    # AUTH: Wrong password?
     if not verify_password(password, user.password_hash):
-        attempts = record_failed_attempt(user)
+        attempts  = record_failed_attempt(user)
         remaining = max(0, MAX_FAILED_ATTEMPTS - attempts)
         log_audit(email, status='failed', failure_reason='wrong_password', user_id=user.id)
         logger.warning(f"{log_context()} Failed login: {email} — attempt {attempts}/{MAX_FAILED_ATTEMPTS}")
@@ -1107,51 +947,25 @@ def login():
                        if remaining > 0 else 'Account locked due to too many failed attempts.',
             'attempts_remaining': remaining,
         }), 401
-
-    # AUTH: Email not verified?
     if not user.is_verified:
         log_audit(email, status='failed', failure_reason='email_not_verified', user_id=user.id)
-        return jsonify({
-            'success': False,
-            'error':   'Please verify your email before logging in.'
-        }), 403
-
-    # ✅ Login success
+        return jsonify({'success': False, 'error': 'Please verify your email before logging in.'}), 403
     reset_failed_attempts(user)
-
     if password_needs_rehash(user.password_hash):
         user.password_hash = hash_password(password)
         db.session.commit()
         logger.info(f"Password upgraded to argon2 for {email}")
-
-    token_payload = {
-        'email':   email,
-        'user_id': user.id,
-        'plan':    user.plan,
-    }
-    access_token  = jwt.encode({**token_payload, 'type': 'access',
-                                 'exp': datetime.utcnow() + timedelta(minutes=15)},
-                                secret, algorithm="HS256")
-    refresh_token = jwt.encode({**token_payload, 'type': 'refresh',
-                                 'exp': datetime.utcnow() + timedelta(days=30)},
-                                secret, algorithm="HS256")
-
+    token_payload = {'email': email, 'user_id': user.id, 'plan': user.plan}
+    access_token  = jwt.encode({**token_payload, 'type': 'access',  'exp': datetime.utcnow() + timedelta(minutes=15)}, secret, algorithm="HS256")
+    refresh_token = jwt.encode({**token_payload, 'type': 'refresh', 'exp': datetime.utcnow() + timedelta(days=30)},    secret, algorithm="HS256")
     log_audit(email, status='success', user_id=user.id)
     logger.info(f"{log_context()} Login: {email} (plan={user.plan})")
-    # Send admin login alert (non-blocking)
     _login_ip         = request.headers.get('X-Forwarded-For', request.remote_addr or 'unknown').split(',')[0].strip()
     _login_user_agent = request.headers.get('User-Agent', 'unknown')
     _admin_email      = os.getenv('ADMIN_EMAIL') or os.getenv('SMTP_USER')
     if _admin_email:
         _executor.submit(_send_login_alert, _admin_email, email, _login_ip, _login_user_agent)
-    return jsonify({
-        'success':       True,
-        'access_token':  access_token,
-        'refresh_token': refresh_token,
-        'expires_in':    900,
-        'plan':          user.plan,
-    })
-
+    return jsonify({'success': True, 'access_token': access_token, 'refresh_token': refresh_token, 'expires_in': 900, 'plan': user.plan})
 
 @v1.route('/auth/refresh', methods=['POST'])
 @limiter.limit("30 per hour")
@@ -1168,11 +982,9 @@ def refresh_token_endpoint():
         if payload.get('type') != 'refresh':
             return jsonify({'success': False, 'error': 'Invalid token type'}), 401
         new_token = jwt.encode({
-            'email':   payload['email'],
-            'user_id': payload.get('user_id'),
-            'plan':    payload.get('plan', 'FREE'),
-            'type':    'access',
-            'exp':     datetime.utcnow() + timedelta(minutes=15)
+            'email': payload['email'], 'user_id': payload.get('user_id'),
+            'plan': payload.get('plan', 'FREE'), 'type': 'access',
+            'exp': datetime.utcnow() + timedelta(minutes=15)
         }, secret, algorithm="HS256")
         return jsonify({'success': True, 'access_token': new_token, 'expires_in': 900})
     except jwt.ExpiredSignatureError:
@@ -1180,14 +992,9 @@ def refresh_token_endpoint():
     except jwt.InvalidTokenError:
         return jsonify({'success': False, 'error': 'Invalid refresh token'}), 401
 
-
 @v1.route('/auth/logout', methods=['POST'])
 @token_required
 def logout():
-    """
-    AUTH: Blacklist the current access token so it can't be reused.
-    Client must also delete tokens from storage.
-    """
     try:
         raw_token = request.headers['Authorization'].split(" ")[1]
         blacklist_token(raw_token)
@@ -1197,60 +1004,34 @@ def logout():
         logger.error(f"Logout error: {e}")
         return jsonify({'success': False, 'error': 'Logout failed'}), 500
 
-
 @v1.route('/auth/usage', methods=['GET'])
 @token_required
 def get_usage():
-    """Returns today's real usage from DB for the authenticated user."""
     try:
-        today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-
-        # Total trading API calls today (analyze + portfolio + compare, excluding cache hits)
-        total_calls = db.session.query(UserUsage).filter(
-            UserUsage.user_id   == g.user_id,
-            UserUsage.timestamp >= today_start,
+        today_start     = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        total_calls     = db.session.query(UserUsage).filter(
+            UserUsage.user_id == g.user_id, UserUsage.timestamp >= today_start,
             UserUsage.cache_hit == False,
-            db.or_(
-                UserUsage.endpoint.like('%/analyze/%'),
-                UserUsage.endpoint.like('%/portfolio/%'),
-                UserUsage.endpoint.like('%/compare/%'),
-            )
+            db.or_(UserUsage.endpoint.like('%/analyze/%'), UserUsage.endpoint.like('%/portfolio/%'), UserUsage.endpoint.like('%/compare/%'))
         ).count()
-
-        # Portfolio calls today
         portfolio_calls = db.session.query(UserUsage).filter(
-            UserUsage.user_id   == g.user_id,
-            UserUsage.endpoint.like('%/portfolio/%'),
-            UserUsage.timestamp >= today_start,
-            UserUsage.cache_hit == False
+            UserUsage.user_id == g.user_id, UserUsage.endpoint.like('%/portfolio/%'),
+            UserUsage.timestamp >= today_start, UserUsage.cache_hit == False
         ).count()
-
         plan   = g.user_plan
         limits = PLAN_LIMITS.get(plan, PLAN_LIMITS['FREE'])
-
-        return jsonify({
-            'success': True,
-            'data': {
-                'plan':                  plan,
-                'daily_api_calls_used':  total_calls,
-                'daily_api_calls_limit': limits['daily_calls'],
-                'portfolios_used_today': portfolio_calls,
-                'portfolio_limit':       limits['portfolio_per_day'],
-                'reset_at':              'midnight UTC',
-            }
-        })
+        return jsonify({'success': True, 'data': {
+            'plan': plan, 'daily_api_calls_used': total_calls,
+            'daily_api_calls_limit': limits['daily_calls'],
+            'portfolios_used_today': portfolio_calls,
+            'portfolio_limit': limits['portfolio_per_day'],
+            'reset_at': 'midnight UTC',
+        }})
     except Exception as e:
         logger.error(f"{log_context()} usage endpoint error: {e}")
         return jsonify({'success': False, 'error': 'Could not fetch usage'}), 500
-
-
-# ── Trading endpoints ─────────────────────────────────────────────────────────
-
 # ── Portfolio job store ───────────────────────────────────────────────────────
-# Jobs are stored in Redis (production) or in-memory dict (fallback).
-# Each job: { status, progress, result, error, created_at }
-
-JOB_TTL = 3600  # jobs expire after 1 hour
+JOB_TTL = 3600
 
 def _job_key(job_id: str) -> str:
     return f"portfolio_job:{job_id}"
@@ -1264,7 +1045,7 @@ def _set_job(job_id: str, data: dict):
             logger.warning(f"Redis job SET failed: {e}")
     set_cache(_job_key(job_id), data, JOB_TTL)
 
-def _get_job(job_id: str) -> dict | None:
+def _get_job(job_id: str):
     if redis_client:
         try:
             val = redis_client.get(_job_key(job_id))
@@ -1274,16 +1055,13 @@ def _get_job(job_id: str) -> dict | None:
     return get_from_cache(_job_key(job_id))
 
 def _run_swing_job(job_id: str, budget: float, risk: str, user_id: int, plan: str):
-    """Background thread: run swing portfolio and store result."""
     try:
         _set_job(job_id, {'status': 'processing', 'progress': 5, 'result': None, 'error': None})
         result = trading_api.generate_swing_portfolio(budget, risk)
         _set_job(job_id, {'status': 'complete', 'progress': 100, 'result': result, 'error': None})
-        # Track usage
         with app.app_context():
             try:
-                usage = UserUsage(user_id=user_id, endpoint='/api/v1/portfolio/swing',
-                                  cost_estimate=2.0, cache_hit=False)
+                usage = UserUsage(user_id=user_id, endpoint='/api/v1/portfolio/swing', cost_estimate=2.0, cache_hit=False)
                 db.session.add(usage)
                 db.session.commit()
             except Exception as e:
@@ -1293,23 +1071,9 @@ def _run_swing_job(job_id: str, budget: float, risk: str, user_id: int, plan: st
         _set_job(job_id, {'status': 'failed', 'progress': 0, 'result': None, 'error': str(e)})
 
 def _run_position_job(job_id: str, budget: float, risk: str, time_period: int, user_id: int, plan: str):
-    """Background thread: run position portfolio and store result."""
-    try:
-        _set_job(job_id, {'status': 'processing', 'progress': 5, 'result': None, 'error': None})
-        result = trading_api.generate_position_portfolio(budget, risk, time_period)
-        _set_job(job_id, {'status': 'complete', 'progress': 100, 'result': result, 'error': None})
-        with app.app_context():
-            try:
-                usage = UserUsage(user_id=user_id, endpoint='/api/v1/portfolio/position',
-                                  cost_estimate=2.0, cache_hit=False)
-                db.session.add(usage)
-                db.session.commit()
-            except Exception as e:
-                logger.warning(f"Usage tracking failed for job {job_id}: {e}")
-    except Exception as e:
-        logger.error(f"Portfolio job {job_id} failed: {e}")
-        _set_job(job_id, {'status': 'failed', 'progress': 0, 'result': None, 'error': str(e)})
-
+    """DISABLED — position portfolio burns too many news API tokens."""
+    _set_job(job_id, {'status': 'failed', 'progress': 0, 'result': None, 'error': 'Position trading portfolio is coming soon.'})
+# ── Trading endpoints ─────────────────────────────────────────────────────────
 @v1.route('/portfolio/swing/start', methods=['POST'])
 @token_required
 @plan_required('portfolio')
@@ -1317,7 +1081,6 @@ def _run_position_job(job_id: str, budget: float, risk: str, time_period: int, u
 @require_systems
 @limiter.limit("5 per minute")
 def start_swing_portfolio():
-    """Start a portfolio generation job and return job_id immediately."""
     try:
         data   = request.get_json() or {}
         budget = validate_budget(data.get('budget'))
@@ -1340,34 +1103,21 @@ def start_swing_portfolio():
 @require_systems
 @limiter.limit("5 per minute")
 def start_position_portfolio():
-    """Start a position portfolio generation job and return job_id immediately."""
-    try:
-        data        = request.get_json() or {}
-        budget      = validate_budget(data.get('budget'))
-        risk        = validate_risk_appetite(data.get('risk_appetite'))
-        time_period = validate_time_period(data.get('time_period'))
-        job_id = uuid.uuid4().hex
-        _set_job(job_id, {'status': 'queued', 'progress': 0, 'result': None, 'error': None})
-        _executor.submit(_run_position_job, job_id, budget, risk, time_period, g.user_id, g.user_plan)
-        logger.info(f"{log_context()} Started position portfolio job {job_id}")
-        return jsonify({'success': True, 'job_id': job_id})
-    except (ValueError, KeyError) as e:
-        return jsonify({'success': False, 'error': str(e)}), 400
-    except Exception as e:
-        logger.error(f"{log_context()} portfolio/position/start: {e}")
-        return jsonify({'success': False, 'error': 'Internal server error'}), 500
+    # ── TEMPORARILY DISABLED — burns news API tokens ──
+    return jsonify({
+        'success': False,
+        'error':   'Position trading portfolio is coming soon. Please use Swing Trading portfolio for now.',
+        'code':    'FEATURE_DISABLED',
+    }), 503
 
 @v1.route('/portfolio/job/<job_id>', methods=['GET'])
 @token_required
 @limiter.limit("30 per minute")
 def get_portfolio_job(job_id: str):
-    """Poll job status. Returns status, progress (0-100), and result when complete."""
     job = _get_job(job_id)
     if not job:
         return jsonify({'success': False, 'error': 'Job not found or expired'}), 404
     return jsonify({'success': True, 'data': job})
-
-
 
 @v1.route('/stocks', methods=['GET'])
 def get_all_stocks():
@@ -1382,69 +1132,49 @@ def get_all_stocks():
     set_cache(cache_key, result)
     return jsonify({'success': True, 'data': result})
 
-
 def analyze_stock(system_type: str, symbol: str):
     try:
         symbol = validate_symbol(symbol)
         g.current_symbol = symbol
-
-        # AUTH: Check daily limit before serving even cached results.
-        # Cached responses are still counted against the user's quota.
         user_id = getattr(g, 'user_id', None)
         plan    = getattr(g, 'user_plan', 'FREE')
         limit   = PLAN_LIMITS.get(plan, PLAN_LIMITS['FREE']).get('daily_calls', 10)
-
         if limit < 999999 and user_id:
             today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
             count = db.session.query(UserUsage).filter(
-                UserUsage.user_id   == user_id,
-                UserUsage.timestamp >= today_start,
+                UserUsage.user_id == user_id, UserUsage.timestamp >= today_start,
                 UserUsage.cache_hit == False,
-                db.or_(
-                    UserUsage.endpoint.like('%/analyze/%'),
-                    UserUsage.endpoint.like('%/portfolio/%'),
-                    UserUsage.endpoint.like('%/compare/%'),
-                )
+                db.or_(UserUsage.endpoint.like('%/analyze/%'), UserUsage.endpoint.like('%/portfolio/%'), UserUsage.endpoint.like('%/compare/%'))
             ).count()
             if count >= limit:
                 return jsonify({
                     'success': False,
-                    'error':   f'{plan} plan allows {limit} API calls per day. '
-                               f'You have used {count}/{limit} today. '
-                               f'Upgrade to PRO at sentiquant.org/pricing for 500 calls/day.',
+                    'error':   f'{plan} plan allows {limit} API calls per day. You have used {count}/{limit} today. Upgrade to PRO at sentiquant.org/pricing for 500 calls/day.',
                     'code':    'DAILY_LIMIT_EXCEEDED',
                 }), 429
-
         precomputed = get_precomputed(system_type, symbol)
         if precomputed:
             g.cache_hit = True
             return jsonify({'success': True, 'data': precomputed, 'source': 'precomputed'})
-
         cache_key = f"{system_type}_analysis_{symbol}"
         if cached := get_from_cache(cache_key):
             g.cache_hit = True
             return jsonify({'success': True, 'data': cached, 'source': 'cache'})
-
         system = getattr(trading_api, f"{system_type}_system")
         if not system:
             return jsonify({'success': False, 'error': f'{system_type.capitalize()} system unavailable'}), 503
-
         analysis_func = getattr(system, f"analyze_{system_type}_trading_stock")
         result        = _fetch_with_retry(analysis_func, symbol)
-
         if not result:
             return jsonify({'success': False, 'error': f'Could not analyze {symbol}'}), 404
-
         formatted = trading_api.format_analysis_response(result, system_type.capitalize())
         set_cache(cache_key, formatted)
         return jsonify({'success': True, 'data': formatted, 'source': 'live'})
-
     except ValueError as e:
         return jsonify({'success': False, 'error': str(e)}), 400
     except Exception as e:
         logger.error(f"{log_context()} analyze/{system_type}/{symbol}: {e}\n{traceback.format_exc()}")
         return jsonify({'success': False, 'error': 'An internal server error occurred'}), 500
-
 
 @v1.route('/analyze/swing/<symbol>', methods=['GET'])
 @token_required
@@ -1454,27 +1184,19 @@ def analyze_stock(system_type: str, symbol: str):
 def analyze_swing_stock_endpoint(symbol):
     return analyze_stock('swing', symbol)
 
-
 @v1.route('/analyze/guest/<symbol>', methods=['GET'])
 @require_systems
 def analyze_guest_endpoint(symbol):
-    """Guest analysis — no auth required. 3 analyses per IP per day."""
     try:
         symbol = validate_symbol(symbol)
         g.current_symbol = symbol
-
-        # Check guest daily limit via Redis (IP-based)
-        # Cloudflare sets CF-Connecting-IP to the real visitor IP
-        # X-Forwarded-For may contain Cloudflare's own IPs — use CF-Connecting-IP first
         ip = (
             request.headers.get('CF-Connecting-IP') or
             request.headers.get('X-Real-IP') or
             request.headers.get('X-Forwarded-For', '').split(',')[0].strip() or
-            request.remote_addr or
-            'unknown'
+            request.remote_addr or 'unknown'
         ).strip()
         guest_key = f"guest_limit:{ip}"
-
         if redis_client:
             try:
                 count = redis_client.get(guest_key)
@@ -1482,39 +1204,27 @@ def analyze_guest_endpoint(symbol):
                 if count >= 1:
                     return jsonify({
                         'success': False,
-                        'error': 'Guest limit reached. Sign up free for 10 analyses per day.',
-                        'code': 'GUEST_LIMIT_EXCEEDED',
+                        'error':   'Guest limit reached. Sign up free for 10 analyses per day.',
+                        'code':    'GUEST_LIMIT_EXCEEDED',
                     }), 429
             except Exception as e:
-                # Redis unavailable — fail open, allow the request through
                 logger.warning(f"Guest limit check failed (Redis down), allowing request: {e}")
-
-        # Try cache first
         cache_key = f"swing_analysis_{symbol}"
         if cached := get_from_cache(cache_key):
             g.cache_hit = True
-            # Still increment guest counter even for cached results
             if redis_client:
                 try:
                     pipe = redis_client.pipeline()
                     pipe.incr(guest_key)
-                    # No TTL — guest limit is permanent until signup
                     pipe.execute()
                 except Exception:
                     pass
             return jsonify({'success': True, 'data': cached, 'source': 'cache', 'guest': True})
-
-        # Live analysis
-        result = _fetch_with_retry(
-            trading_api.swing_system.analyze_swing_trading_stock, symbol
-        )
+        result = _fetch_with_retry(trading_api.swing_system.analyze_swing_trading_stock, symbol)
         if not result:
             return jsonify({'success': False, 'error': f'Could not analyze {symbol}'}), 404
-
         formatted = trading_api.format_analysis_response(result, 'Swing')
         set_cache(cache_key, formatted)
-
-        # Increment guest counter
         if redis_client:
             try:
                 pipe = redis_client.pipeline()
@@ -1523,15 +1233,12 @@ def analyze_guest_endpoint(symbol):
                 pipe.execute()
             except Exception:
                 pass
-
         return jsonify({'success': True, 'data': formatted, 'source': 'live', 'guest': True})
-
     except ValueError as e:
         return jsonify({'success': False, 'error': str(e)}), 400
     except Exception as e:
         logger.error(f"{log_context()} analyze/guest/{symbol}: {e}")
         return jsonify({'success': False, 'error': 'An internal server error occurred'}), 500
-
 
 @v1.route('/analyze/position/<symbol>', methods=['GET'])
 @token_required
@@ -1540,7 +1247,6 @@ def analyze_guest_endpoint(symbol):
 @limiter.limit("10 per minute")
 def analyze_position_stock_endpoint(symbol):
     return analyze_stock('position', symbol)
-
 
 @v1.route('/portfolio/swing', methods=['POST'])
 @token_required
@@ -1561,7 +1267,6 @@ def create_swing_portfolio_endpoint():
         logger.error(f"{log_context()} portfolio/swing: {e}\n{traceback.format_exc()}")
         return jsonify({'success': False, 'error': 'Internal server error'}), 500
 
-
 @v1.route('/portfolio/position', methods=['POST'])
 @token_required
 @plan_required('portfolio')
@@ -1569,19 +1274,12 @@ def create_swing_portfolio_endpoint():
 @require_systems
 @limiter.limit("5 per minute")
 def create_position_portfolio_endpoint():
-    try:
-        data        = request.get_json() or {}
-        budget      = validate_budget(data.get('budget'))
-        risk        = validate_risk_appetite(data.get('risk_appetite'))
-        time_period = validate_time_period(data.get('time_period'))
-        result      = trading_api.generate_position_portfolio(budget, risk, time_period)
-        return jsonify({'success': True, 'data': result})
-    except (ValueError, KeyError) as e:
-        return jsonify({'success': False, 'error': str(e)}), 400
-    except Exception as e:
-        logger.error(f"{log_context()} portfolio/position: {e}\n{traceback.format_exc()}")
-        return jsonify({'success': False, 'error': 'Internal server error'}), 500
-
+    # ── TEMPORARILY DISABLED — burns news API tokens ──
+    return jsonify({
+        'success': False,
+        'error':   'Position trading portfolio is coming soon. Please use Swing Trading portfolio for now.',
+        'code':    'FEATURE_DISABLED',
+    }), 503
 
 @v1.route('/compare/<symbol>', methods=['GET'])
 @token_required
@@ -1593,215 +1291,3 @@ def compare_strategies_endpoint(symbol):
         symbol = validate_symbol(symbol)
         g.current_symbol = symbol
         cache_key = f"compare_{symbol}"
-        if cached := get_from_cache(cache_key):
-            g.cache_hit = True
-            return jsonify({'success': True, 'data': cached})
-        if not trading_api.swing_system or not trading_api.position_system:
-            return jsonify({'success': False, 'error': 'One or more systems unavailable'}), 503
-        swing_result    = _fetch_with_retry(trading_api.swing_system.analyze_swing_trading_stock, symbol)
-        position_result = _fetch_with_retry(trading_api.position_system.analyze_position_trading_stock, symbol)
-        if not swing_result or not position_result:
-            return jsonify({'success': False, 'error': f'Could not complete comparison for {symbol}'}), 404
-        result = {
-            'swing_analysis':    trading_api.format_analysis_response(swing_result,    'Swing'),
-            'position_analysis': trading_api.format_analysis_response(position_result, 'Position'),
-        }
-        set_cache(cache_key, result)
-        return jsonify({'success': True, 'data': result})
-    except ValueError as e:
-        return jsonify({'success': False, 'error': str(e)}), 400
-    except Exception as e:
-        logger.error(f"{log_context()} compare/{symbol}: {e}\n{traceback.format_exc()}")
-        return jsonify({'success': False, 'error': 'Internal server error'}), 500
-
-
-# ── Observability ─────────────────────────────────────────────────────────────
-
-@v1.route('/system-status', methods=['GET'])
-def system_status():
-    status = {
-        'trading_systems_imported': SYSTEMS_AVAILABLE,
-        'swing_system_ready':       trading_api.swing_system is not None,
-        'position_system_ready':    trading_api.position_system is not None,
-        'fyers_configured':         bool(os.getenv('FYERS_APP_ID') and os.getenv('FYERS_ACCESS_TOKEN')),
-        'redis_connected':          redis_client is not None,
-        'nse_symbol_list_loaded':   len(NSE_SYMBOLS) > 0,
-        'passlib_argon2':           PASSLIB_AVAILABLE,
-        'smtp_configured':          bool(os.getenv('SMTP_HOST')),
-        'database':                 'connected',
-    }
-    try:
-        db.session.execute(db.text('SELECT 1'))
-    except Exception:
-        status['database'] = 'error'
-    all_ready = all([status['trading_systems_imported'], status['swing_system_ready'],
-                     status['position_system_ready'], status['fyers_configured'],
-                     status['database'] == 'connected'])
-    return jsonify({'success': True, 'overall': 'ready' if all_ready else 'degraded',
-                    'components': status}), 200 if all_ready else 503
-
-
-@v1.route('/health', methods=['GET'])
-def health_check():
-    return jsonify({'success': True, 'status': 'alive'}), 200
-
-
-@v1.route('/contact', methods=['POST'])
-@limiter.limit("5 per hour")
-def contact():
-    """Contact form — sends email to admin via Zoho SMTP."""
-    data    = request.get_json() or {}
-    name    = data.get('name', '').strip()
-    email   = data.get('email', '').strip()
-    subject = data.get('subject', '').strip()
-    message = data.get('message', '').strip()
-
-    if not all([name, email, subject, message]):
-        return jsonify({'success': False, 'error': 'Missing required fields'}), 400
-    if len(message) < 20:
-        return jsonify({'success': False, 'error': 'Message too short'}), 400
-
-    smtp_host = os.getenv("SMTP_HOST")
-    if not smtp_host:
-        logger.warning("Contact form submitted but SMTP not configured")
-        return jsonify({'success': False, 'error': 'service_unavailable'}), 503
-
-    try:
-        recipient = os.getenv("ADMIN_EMAIL") or os.getenv("SMTP_USER")
-        html_body = f"""
-        <div style="font-family:sans-serif;max-width:600px;margin:0 auto;background:#0f1117;color:#fff;border-radius:12px;overflow:hidden">
-          <div style="padding:24px 32px;border-bottom:1px solid #1e2130">
-            <span style="font-size:20px;font-weight:bold">⚡ SentiQuant</span>
-            <p style="color:#8b8fa8;margin:4px 0 0;font-size:13px">Contact Form Submission</p>
-          </div>
-          <div style="padding:32px">
-            <table style="width:100%;border-collapse:collapse">
-              <tr><td style="color:#8b8fa8;padding:8px 0;width:120px;font-size:13px">Name</td><td style="color:#fff;font-size:13px">{name}</td></tr>
-              <tr><td style="color:#8b8fa8;padding:8px 0;font-size:13px">Email</td><td style="font-size:13px"><a href="mailto:{email}" style="color:#06b6d4">{email}</a></td></tr>
-              <tr><td style="color:#8b8fa8;padding:8px 0;font-size:13px">Subject</td><td style="color:#fff;font-size:13px">{subject}</td></tr>
-            </table>
-            <div style="margin-top:24px;padding:16px;background:#1e2130;border-radius:8px">
-              <p style="color:#8b8fa8;font-size:11px;margin:0 0 8px;text-transform:uppercase;letter-spacing:0.05em">Message</p>
-              <p style="color:#fff;font-size:14px;line-height:1.6;margin:0;white-space:pre-wrap">{message}</p>
-            </div>
-          </div>
-          <div style="padding:16px 32px;border-top:1px solid #1e2130;text-align:center">
-            <p style="color:#8b8fa8;font-size:12px;margin:0">SentiQuant — AI Stock Analysis Platform</p>
-          </div>
-        </div>
-        """
-        from email.mime.multipart import MIMEMultipart
-        from email.mime.text import MIMEText as _MIMEText
-        msg = MIMEMultipart('alternative')
-        msg['Subject']  = f"[Contact] {subject} — from {name}"
-        msg['From']     = os.getenv("SMTP_USER")
-        msg['To']       = recipient
-        msg['Reply-To'] = email
-        msg.attach(_MIMEText(f"Name: {name}\nEmail: {email}\nSubject: {subject}\n\nMessage:\n{message}", 'plain'))
-        msg.attach(_MIMEText(html_body, 'html'))
-
-        with smtplib.SMTP(smtp_host, int(os.getenv("SMTP_PORT", 587))) as server:
-            server.starttls()
-            server.login(os.getenv("SMTP_USER"), os.getenv("SMTP_PASS"))
-            server.sendmail(msg['From'], [recipient], msg.as_string())
-
-        logger.info(f"Contact form email sent from {email} ({name})")
-        return jsonify({'success': True})
-    except Exception as e:
-        logger.error(f"Contact form email failed: {e}")
-        return jsonify({'success': False, 'error': 'Failed to send message'}), 500
-
-
-@v1.route('/disclaimer', methods=['GET'])
-def get_disclaimer():
-    return jsonify({'success': True, 'data': SEBI_DISCLAIMER})
-
-
-@v1.route('/admin/usage', methods=['GET'])
-@token_required
-def usage_stats():
-    since_days = int(request.args.get('days', 7))
-    since      = datetime.utcnow() - timedelta(days=since_days)
-    rows = (db.session.query(
-                UserUsage.endpoint,
-                db.func.count(UserUsage.id).label('calls'),
-                db.func.sum(UserUsage.cost_estimate).label('total_cost'),
-                db.func.avg(UserUsage.response_ms).label('avg_ms'),
-                db.func.sum(db.cast(UserUsage.cache_hit, db.Integer)).label('cache_hits'))
-            .filter(UserUsage.timestamp >= since)
-            .group_by(UserUsage.endpoint)
-            .order_by(db.desc('calls'))
-            .all())
-    data = [{
-        'endpoint':        r.endpoint,
-        'calls':           r.calls,
-        'total_cost':      round(r.total_cost or 0, 2),
-        'avg_response_ms': round(r.avg_ms or 0, 1),
-        'cache_hit_rate':  round((r.cache_hits or 0) / r.calls * 100, 1),
-    } for r in rows]
-    return jsonify({'success': True, 'data': data, 'period_days': since_days})
-
-
-@v1.route('/admin/audit', methods=['GET'])
-@token_required
-def audit_log():
-    """AUTH: View recent login audit entries. Token required."""
-    since_days = int(request.args.get('days', 1))
-    since      = datetime.utcnow() - timedelta(days=since_days)
-    rows = (db.session.query(LoginAudit)
-            .filter(LoginAudit.created_at >= since)
-            .order_by(LoginAudit.created_at.desc())
-            .limit(200)
-            .all())
-    data = [{
-        'email':          r.email,
-        'status':         r.status,
-        'failure_reason': r.failure_reason,
-        'ip_address':     r.ip_address,
-        'created_at':     r.created_at.isoformat(),
-    } for r in rows]
-    return jsonify({'success': True, 'data': data, 'period_days': since_days})
-
-
-# ── Register blueprint + legacy aliases ──────────────────────────────────────
-
-app.register_blueprint(v1)
-
-@app.route('/api/stocks',                     methods=['GET'])
-def legacy_stocks():         return get_all_stocks()
-
-@app.route('/api/analyze/swing/<symbol>',    methods=['GET'])
-@token_required
-def legacy_swing(symbol):    return analyze_stock('swing', symbol)
-
-@app.route('/api/analyze/position/<symbol>', methods=['GET'])
-@token_required
-def legacy_position(symbol): return analyze_stock('position', symbol)
-
-@app.route('/api/health',                    methods=['GET'])
-def legacy_health():         return jsonify({'success': True, 'status': 'alive'}), 200
-
-@app.route('/api/disclaimer',               methods=['GET'])
-def legacy_disclaimer():     return jsonify({'success': True, 'data': SEBI_DISCLAIMER})
-
-
-# ── Error handlers ────────────────────────────────────────────────────────────
-
-@app.errorhandler(404)
-def not_found(_):    return jsonify({'success': False, 'error': 'Endpoint not found'}), 404
-
-@app.errorhandler(429)
-def rate_limited(_): return jsonify({'success': False, 'error': 'Rate limit exceeded. Please slow down.'}), 429
-
-@app.errorhandler(500)
-def server_error(_): return jsonify({'success': False, 'error': 'Internal server error'}), 500
-
-
-# ── Entrypoint ────────────────────────────────────────────────────────────────
-
-if __name__ == "__main__":
-    from waitress import serve
-    logging.getLogger('waitress').setLevel(logging.WARNING)
-    port = int(os.environ.get("PORT", 5000))
-    logger.info(f"Starting Waitress on port {port}...")
-    serve(app, host="0.0.0.0", port=port)
