@@ -1291,3 +1291,190 @@ def compare_strategies_endpoint(symbol):
         symbol = validate_symbol(symbol)
         g.current_symbol = symbol
         cache_key = f"compare_{symbol}"
+        if cached := get_from_cache(cache_key):
+            g.cache_hit = True
+            return jsonify({'success': True, 'data': cached})
+        if not trading_api.swing_system or not trading_api.position_system:
+            return jsonify({'success': False, 'error': 'One or more systems unavailable'}), 503
+        swing_result    = _fetch_with_retry(trading_api.swing_system.analyze_swing_trading_stock, symbol)
+        position_result = _fetch_with_retry(trading_api.position_system.analyze_position_trading_stock, symbol)
+        if not swing_result or not position_result:
+            return jsonify({'success': False, 'error': f'Could not complete comparison for {symbol}'}), 404
+        result = {
+            'swing_analysis':    trading_api.format_analysis_response(swing_result,    'Swing'),
+            'position_analysis': trading_api.format_analysis_response(position_result, 'Position'),
+        }
+        set_cache(cache_key, result)
+        return jsonify({'success': True, 'data': result})
+    except ValueError as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
+    except Exception as e:
+        logger.error(f"{log_context()} compare/{symbol}: {e}\n{traceback.format_exc()}")
+        return jsonify({'success': False, 'error': 'Internal server error'}), 500
+# ── Observability ─────────────────────────────────────────────────────────────
+@v1.route('/system-status', methods=['GET'])
+def system_status():
+    status = {
+        'trading_systems_imported': SYSTEMS_AVAILABLE,
+        'swing_system_ready':       trading_api.swing_system is not None,
+        'position_system_ready':    trading_api.position_system is not None,
+        'fyers_configured':         bool(os.getenv('FYERS_APP_ID') and os.getenv('FYERS_ACCESS_TOKEN')),
+        'redis_connected':          redis_client is not None,
+        'nse_symbol_list_loaded':   len(NSE_SYMBOLS) > 0,
+        'passlib_argon2':           PASSLIB_AVAILABLE,
+        'smtp_configured':          bool(os.getenv('SMTP_HOST')),
+        'database':                 'connected',
+    }
+    try:
+        db.session.execute(db.text('SELECT 1'))
+    except Exception:
+        status['database'] = 'error'
+    all_ready = all([status['trading_systems_imported'], status['swing_system_ready'],
+                     status['position_system_ready'], status['fyers_configured'],
+                     status['database'] == 'connected'])
+    return jsonify({'success': True, 'overall': 'ready' if all_ready else 'degraded',
+                    'components': status}), 200 if all_ready else 503
+
+@v1.route('/health', methods=['GET'])
+def health_check():
+    return jsonify({'success': True, 'status': 'alive'}), 200
+
+@v1.route('/contact', methods=['POST'])
+@limiter.limit("5 per hour")
+def contact():
+    data    = request.get_json() or {}
+    name    = data.get('name', '').strip()
+    email   = data.get('email', '').strip()
+    subject = data.get('subject', '').strip()
+    message = data.get('message', '').strip()
+    if not all([name, email, subject, message]):
+        return jsonify({'success': False, 'error': 'Missing required fields'}), 400
+    if len(message) < 20:
+        return jsonify({'success': False, 'error': 'Message too short'}), 400
+    smtp_host = os.getenv("SMTP_HOST")
+    if not smtp_host:
+        logger.warning("Contact form submitted but SMTP not configured")
+        return jsonify({'success': False, 'error': 'service_unavailable'}), 503
+    try:
+        recipient = os.getenv("ADMIN_EMAIL") or os.getenv("SMTP_USER")
+        html_body = f"""
+        <div style="font-family:sans-serif;max-width:600px;margin:0 auto;background:#0f1117;color:#fff;border-radius:12px;overflow:hidden">
+          <div style="padding:24px 32px;border-bottom:1px solid #1e2130">
+            <span style="font-size:20px;font-weight:bold">⚡ SentiQuant</span>
+            <p style="color:#8b8fa8;margin:4px 0 0;font-size:13px">Contact Form Submission</p>
+          </div>
+          <div style="padding:32px">
+            <table style="width:100%;border-collapse:collapse">
+              <tr><td style="color:#8b8fa8;padding:8px 0;width:120px;font-size:13px">Name</td><td style="color:#fff;font-size:13px">{name}</td></tr>
+              <tr><td style="color:#8b8fa8;padding:8px 0;font-size:13px">Email</td><td style="font-size:13px"><a href="mailto:{email}" style="color:#06b6d4">{email}</a></td></tr>
+              <tr><td style="color:#8b8fa8;padding:8px 0;font-size:13px">Subject</td><td style="color:#fff;font-size:13px">{subject}</td></tr>
+            </table>
+            <div style="margin-top:24px;padding:16px;background:#1e2130;border-radius:8px">
+              <p style="color:#8b8fa8;font-size:11px;margin:0 0 8px;text-transform:uppercase;letter-spacing:0.05em">Message</p>
+              <p style="color:#fff;font-size:14px;line-height:1.6;margin:0;white-space:pre-wrap">{message}</p>
+            </div>
+          </div>
+          <div style="padding:16px 32px;border-top:1px solid #1e2130;text-align:center">
+            <p style="color:#8b8fa8;font-size:12px;margin:0">SentiQuant — AI Stock Analysis Platform</p>
+          </div>
+        </div>
+        """
+        from email.mime.multipart import MIMEMultipart
+        from email.mime.text import MIMEText as _MIMEText
+        msg = MIMEMultipart('alternative')
+        msg['Subject']  = f"[Contact] {subject} — from {name}"
+        msg['From']     = os.getenv("SMTP_USER")
+        msg['To']       = recipient
+        msg['Reply-To'] = email
+        msg.attach(_MIMEText(f"Name: {name}\nEmail: {email}\nSubject: {subject}\n\nMessage:\n{message}", 'plain'))
+        msg.attach(_MIMEText(html_body, 'html'))
+        with smtplib.SMTP(smtp_host, int(os.getenv("SMTP_PORT", 587))) as server:
+            server.starttls()
+            server.login(os.getenv("SMTP_USER"), os.getenv("SMTP_PASS"))
+            server.sendmail(msg['From'], [recipient], msg.as_string())
+        logger.info(f"Contact form email sent from {email} ({name})")
+        return jsonify({'success': True})
+    except Exception as e:
+        logger.error(f"Contact form email failed: {e}")
+        return jsonify({'success': False, 'error': 'Failed to send message'}), 500
+
+@v1.route('/disclaimer', methods=['GET'])
+def get_disclaimer():
+    return jsonify({'success': True, 'data': SEBI_DISCLAIMER})
+
+@v1.route('/admin/usage', methods=['GET'])
+@token_required
+def usage_stats():
+    since_days = int(request.args.get('days', 7))
+    since      = datetime.utcnow() - timedelta(days=since_days)
+    rows = (db.session.query(
+                UserUsage.endpoint,
+                db.func.count(UserUsage.id).label('calls'),
+                db.func.sum(UserUsage.cost_estimate).label('total_cost'),
+                db.func.avg(UserUsage.response_ms).label('avg_ms'),
+                db.func.sum(db.cast(UserUsage.cache_hit, db.Integer)).label('cache_hits'))
+            .filter(UserUsage.timestamp >= since)
+            .group_by(UserUsage.endpoint)
+            .order_by(db.desc('calls'))
+            .all())
+    data = [{
+        'endpoint':        r.endpoint,
+        'calls':           r.calls,
+        'total_cost':      round(r.total_cost or 0, 2),
+        'avg_response_ms': round(r.avg_ms or 0, 1),
+        'cache_hit_rate':  round((r.cache_hits or 0) / r.calls * 100, 1),
+    } for r in rows]
+    return jsonify({'success': True, 'data': data, 'period_days': since_days})
+
+@v1.route('/admin/audit', methods=['GET'])
+@token_required
+def audit_log():
+    since_days = int(request.args.get('days', 1))
+    since      = datetime.utcnow() - timedelta(days=since_days)
+    rows = (db.session.query(LoginAudit)
+            .filter(LoginAudit.created_at >= since)
+            .order_by(LoginAudit.created_at.desc())
+            .limit(200).all())
+    data = [{
+        'email':          r.email,
+        'status':         r.status,
+        'failure_reason': r.failure_reason,
+        'ip_address':     r.ip_address,
+        'created_at':     r.created_at.isoformat(),
+    } for r in rows]
+    return jsonify({'success': True, 'data': data, 'period_days': since_days})
+# ── Register blueprint + legacy aliases ──────────────────────────────────────
+app.register_blueprint(v1)
+
+@app.route('/api/stocks',                     methods=['GET'])
+def legacy_stocks():         return get_all_stocks()
+
+@app.route('/api/analyze/swing/<symbol>',    methods=['GET'])
+@token_required
+def legacy_swing(symbol):    return analyze_stock('swing', symbol)
+
+@app.route('/api/analyze/position/<symbol>', methods=['GET'])
+@token_required
+def legacy_position(symbol): return analyze_stock('position', symbol)
+
+@app.route('/api/health',                    methods=['GET'])
+def legacy_health():         return jsonify({'success': True, 'status': 'alive'}), 200
+
+@app.route('/api/disclaimer',               methods=['GET'])
+def legacy_disclaimer():     return jsonify({'success': True, 'data': SEBI_DISCLAIMER})
+# ── Error handlers ────────────────────────────────────────────────────────────
+@app.errorhandler(404)
+def not_found(_):    return jsonify({'success': False, 'error': 'Endpoint not found'}), 404
+
+@app.errorhandler(429)
+def rate_limited(_): return jsonify({'success': False, 'error': 'Rate limit exceeded. Please slow down.'}), 429
+
+@app.errorhandler(500)
+def server_error(_): return jsonify({'success': False, 'error': 'Internal server error'}), 500
+# ── Entrypoint ────────────────────────────────────────────────────────────────
+if __name__ == "__main__":
+    from waitress import serve
+    logging.getLogger('waitress').setLevel(logging.WARNING)
+    port = int(os.environ.get("PORT", 5000))
+    logger.info(f"Starting Waitress on port {port}...")
+    serve(app, host="0.0.0.0", port=port)
