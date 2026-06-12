@@ -881,15 +881,34 @@ class EnhancedSwingTradingSystem:
     # ========================================================================
     # SENTIMENT ANALYSIS (With caching)
     # ========================================================================
+    def _build_relevance_pattern(self, base_symbol: str, company_name: str):
+        """Regex matching the company in a text snippet.
+        Short symbols (<=4 chars) match case-SENSITIVELY so 'according'
+        can never match 'ACC'."""
+        import re
+        generic = {'limited', 'ltd', 'india', 'company', 'corporation',
+                   'industries', 'enterprises', 'services', 'of', 'the', 'and'}
+        tokens = [t for t in company_name.split()
+                  if t.lower() not in generic and len(t) >= 3]
+        terms = []
+        if tokens:
+            terms.append(re.escape(tokens[0]))             # e.g. "Reliance", "Tata"
+        if len(tokens) >= 2:
+            terms.append(re.escape(' '.join(tokens[:2])))  # e.g. "Tata Motors"
+        sym_pat = re.compile(r'\b' + re.escape(base_symbol) + r'\b')  # case-sensitive
+        name_pat = re.compile(r'\b(' + '|'.join(terms) + r')\b',
+                              re.IGNORECASE) if terms else None
+        return sym_pat, name_pat
     def fetch_indian_news(self, symbol: str, num_articles: int = 15) -> Optional[List[str]]:
         """
-        Fetch FULL news articles using newsapi.ai (Event Registry)
+        Fetch FULL news articles using newsapi.ai (Event Registry).
+        v2: title-keyword search + headline/lede relevance post-filter.
         """
         try:
             if not config.EVENT_REGISTRY_API_KEY:
                 return None
-            # Cache check
-            cache_key = self._get_cache_key("news", symbol, limit=num_articles)
+            # Cache check (v2 key — old unfiltered caches won't be reused)
+            cache_key = self._get_cache_key("news_v2", symbol, limit=num_articles)
             cached = self._get_from_cache(cache_key)
             if cached:
                 return cached.get("articles")
@@ -900,6 +919,7 @@ class EnhancedSwingTradingSystem:
                 "action": "getArticles",
                 "keyword": company_name,
                 "keywordOper": "and",
+                "keywordLoc": "title",      # FIX 1: company must be in TITLE
                 "lang": ["eng"],
                 "articlesPage": 1,
                 "articlesCount": num_articles,
@@ -918,14 +938,29 @@ class EnhancedSwingTradingSystem:
                 logger.warning(f"Event Registry HTTP {response.status_code}")
                 return None
             data = response.json()
+            sym_pat, name_pat = self._build_relevance_pattern(base_symbol, company_name)
             articles = []
+            dropped = 0
             for item in data.get("articles", {}).get("results", []):
-                body = item.get("body")
-                title = item.get("title")
+                body = item.get("body") or ""
+                title = item.get("title") or ""
                 if body and len(body) > 200:
-                    articles.append(body)
+                    text = f"{title}. {body}" if title else body
                 elif title:
-                    articles.append(title)
+                    text = title
+                else:
+                    continue
+                # FIX 2: company must appear in headline/lede (first 600 chars)
+                lede = text[:600]
+                relevant = bool(sym_pat.search(lede)) or \
+                           bool(name_pat and name_pat.search(lede))
+                if relevant:
+                    articles.append(text)
+                else:
+                    dropped += 1
+            if dropped:
+                logger.info(f"📰 {symbol}: kept {len(articles)}, "
+                            f"dropped {dropped} irrelevant articles")
             if articles:
                 self._set_to_cache(
                     cache_key,
@@ -1103,8 +1138,11 @@ class EnhancedSwingTradingSystem:
                     elif ma_20 > ma_50:
                         technical_score += 5
             technical_score = min(100, max(0, technical_score))
-            # Sentiment Score
-            if sentiment_data and len(sentiment_data) >= 3:
+            # Sentiment Score — ONLY from real news.
+            # Sample/fallback news is hardcoded positive templates; scoring it
+            # would inject a fake bullish boost. No real news = neutral 50.
+            news_source = sentiment_data[4] if (sentiment_data and len(sentiment_data) > 4) else "Unknown"
+            if news_source == "Real news" and sentiment_data and len(sentiment_data) >= 3:
                 sentiments = sentiment_data[0] if len(sentiment_data) > 0 else []
                 confidences = sentiment_data[2] if len(sentiment_data) > 2 else []
                 if sentiments and confidences:
