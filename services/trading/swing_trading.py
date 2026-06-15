@@ -910,18 +910,19 @@ class EnhancedSwingTradingSystem:
             text = text[:m.start()]
         return text.strip()
     def _is_relevant(self, text: str, base_symbol: str, company_name: str) -> bool:
-        """Company must appear in the HEADLINE (first sentence / 160 chars),
-        not merely somewhere in the body. Kills 'reliance on oil imports'
-        (the word) and dividend-roundup lists that mention the stock in
-        passing. Short symbols (<=4 chars) match case-sensitively."""
+        """Company must appear in the HEADLINE as a PROPER NOUN (capitalized),
+        not merely as a lowercase common word. Kills 'loan reliance',
+        'taxpayer reliance', 'Big Tech reliance' (the word) while keeping real
+        'Reliance Industries ...' headlines. Matching is case-SENSITIVE so the
+        common noun never matches the company name."""
         head = text.split('.')[0][:160]
         generic = {'limited', 'ltd', 'india', 'company', 'industries',
                    'enterprises', 'services', 'corporation', 'of', 'the', 'and'}
         tokens = [t for t in company_name.split()
                   if t.lower() not in generic and len(t) >= 3]
         full = ' '.join(tokens[:2]) if len(tokens) >= 2 else (tokens[0] if tokens else base_symbol)
-        sym_pat = _re.compile(r'\b' + _re.escape(base_symbol) + r'\b')  # case-sensitive
-        name_pat = _re.compile(r'\b' + _re.escape(full) + r'\b', _re.IGNORECASE)
+        sym_pat = _re.compile(r'\b' + _re.escape(base_symbol) + r'\b')   # case-sensitive
+        name_pat = _re.compile(r'\b' + _re.escape(full) + r'\b')         # case-SENSITIVE proper noun
         return bool(sym_pat.search(head)) or bool(name_pat.search(head))
     def fetch_indian_news(self, symbol: str, num_articles: int = 15) -> Optional[List[str]]:
         """
@@ -932,7 +933,7 @@ class EnhancedSwingTradingSystem:
             if not config.EVENT_REGISTRY_API_KEY:
                 return None
             # v3 cache key — old caches not reused (boilerplate/noise in them)
-            cache_key = self._get_cache_key("news_v3", symbol, limit=num_articles)
+            cache_key = self._get_cache_key("news_v4", symbol, limit=num_articles)
             cached = self._get_from_cache(cache_key)
             if cached:
                 return cached.get("articles")
@@ -1163,13 +1164,18 @@ class EnhancedSwingTradingSystem:
                     elif ma_20 > ma_50:
                         technical_score += 5
             technical_score = min(100, max(0, technical_score))
-            # Sentiment Score — ONLY from real news.
-            # Sample/fallback news is hardcoded positive templates; scoring it
-            # would inject a fake bullish boost. No real news = neutral 50.
+            # Sentiment Score — ONLY from real news, and ONLY with enough of it.
+            # Sample/fallback news is hardcoded positive templates (fake boost).
+            # And 1-2 articles give a jumpy, unreliable reading — so require a
+            # MINIMUM of 3 real articles before letting news move the signal.
+            # Below that threshold: neutral 50 → signal is technicals-only.
+            MIN_ARTICLES_FOR_SENTIMENT = 3
             news_source = sentiment_data[4] if (sentiment_data and len(sentiment_data) > 4) else "Unknown"
-            if news_source == "Real news" and sentiment_data and len(sentiment_data) >= 3:
-                sentiments = sentiment_data[0] if len(sentiment_data) > 0 else []
-                confidences = sentiment_data[2] if len(sentiment_data) > 2 else []
+            sentiments = sentiment_data[0] if (sentiment_data and len(sentiment_data) > 0) else []
+            confidences = sentiment_data[2] if (sentiment_data and len(sentiment_data) > 2) else []
+            if (news_source == "Real news"
+                    and len(sentiments) >= MIN_ARTICLES_FOR_SENTIMENT
+                    and confidences):
                 if sentiments and confidences:
                     sentiment_value = 0
                     total_weight = 0
