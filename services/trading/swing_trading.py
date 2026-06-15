@@ -720,47 +720,66 @@ class EnhancedSwingTradingSystem:
             logger.error(f"Regime detection failed, defaulting SIDEWAYS: {e}")
             return 'SIDEWAYS'
     def _fetch_nifty_index(self):
-        """Fetch NIFTY 50 index OHLCV. Index symbols don't use the -EQ equity
-        path, so this calls the data provider directly with index candidates.
-        Returns a DataFrame with a 'Close' column, or None."""
-        candidates = [
-            "NSE:NIFTY50-INDEX",
-            "NSE:NIFTY 50",
-            "NIFTY50",
-            "NIFTY 50",
-        ]
-        for sym in candidates:
-            try:
-                cache_key = self._get_cache_key("ohlcv_index", sym, period="3mo")
-                cached = self._get_from_cache(cache_key)
-                if cached:
-                    df = pd.DataFrame(cached['ohlcv'])
-                    df['Date'] = pd.to_datetime(df['date'])
-                    df = df.set_index('Date').drop(columns=['date'])
-                    df.columns = ['Open', 'High', 'Low', 'Close', 'Volume']
-                    return df
-                stock_data = self.data_provider.get_stock_data(
-                    symbol=sym,
-                    fetch_ohlcv=True,
-                    fetch_fundamentals=False,
-                    period="3mo",
-                )
-                ohlcv_list = stock_data.get('ohlcv')
-                if not ohlcv_list:
-                    continue
-                df = pd.DataFrame(ohlcv_list)
+        """Fetch NIFTY 50 index OHLCV via the paginated fetcher directly,
+        bypassing get_historical_data's '{exchange}:{symbol}-EQ' builder
+        (indices are not -EQ and not dual-listed). Confirmed working symbol:
+        NSE:NIFTY50-INDEX. Returns a DataFrame with a 'Close' column, or None."""
+        FYERS_NIFTY_SYMBOL = "NSE:NIFTY50-INDEX"
+        cache_key = self._get_cache_key("ohlcv_index", "NIFTY50", period="3mo")
+        try:
+            cached = self._get_from_cache(cache_key)
+            if cached:
+                df = pd.DataFrame(cached['ohlcv'])
                 df['Date'] = pd.to_datetime(df['date'])
-                df = df.set_index('Date')
-                df = df[['open', 'high', 'low', 'close', 'volume']]
+                df = df.set_index('Date').drop(columns=['date'])
                 df.columns = ['Open', 'High', 'Low', 'Close', 'Volume']
-                self._set_to_cache(cache_key, {'ohlcv': ohlcv_list}, 3600)
-                logger.info(f"📈 NIFTY index fetched via '{sym}' ({len(df)} days)")
                 return df
-            except Exception as e:
-                logger.debug(f"NIFTY fetch via '{sym}' failed: {e}")
-                continue
-        logger.warning("⚠️ Could not fetch NIFTY index via any symbol candidate")
-        return None
+            from datetime import datetime as _dt, timedelta as _td
+            end = _dt.now().date()
+            start = end - _td(days=120)
+            df = self.data_provider.fyers.fetch_paginated_history(
+                symbol=FYERS_NIFTY_SYMBOL,
+                resolution='D',
+                start_date=start,
+                end_date=end,
+            )
+            if df is None or df.empty:
+                logger.warning("⚠️ NIFTY index fetch returned no data")
+                return None
+            # Normalize column names to Open/High/Low/Close/Volume
+            df = df.copy()
+            df.columns = [str(c).lower() for c in df.columns]
+            colmap = {}
+            for c in df.columns:
+                if c in ('open',): colmap[c] = 'Open'
+                elif c in ('high',): colmap[c] = 'High'
+                elif c in ('low',): colmap[c] = 'Low'
+                elif c in ('close',): colmap[c] = 'Close'
+                elif c in ('volume', 'vol'): colmap[c] = 'Volume'
+            df = df.rename(columns=colmap)
+            if 'Close' not in df.columns:
+                logger.warning(f"⚠️ NIFTY index missing Close column: {list(df.columns)}")
+                return None
+            if 'Volume' not in df.columns:
+                df['Volume'] = 0
+            # Cache in the raw {ohlcv:[{date,open,...}]} shape used elsewhere
+            try:
+                cache_df = df.reset_index()
+                date_col = cache_df.columns[0]
+                ohlcv_list = [{
+                    'date': str(r[date_col]),
+                    'open': float(r['Open']), 'high': float(r['High']),
+                    'low': float(r['Low']), 'close': float(r['Close']),
+                    'volume': float(r.get('Volume', 0)),
+                } for _, r in cache_df.iterrows()]
+                self._set_to_cache(cache_key, {'ohlcv': ohlcv_list}, 3600)
+            except Exception as ce:
+                logger.debug(f"NIFTY cache write skipped: {ce}")
+            logger.info(f"📈 NIFTY index fetched ({len(df)} days) via {FYERS_NIFTY_SYMBOL}")
+            return df[['Open', 'High', 'Low', 'Close', 'Volume']]
+        except Exception as e:
+            logger.error(f"NIFTY index fetch failed: {e}")
+            return None
     # ========================================================================
     # DATA FETCHING METHODS (Updated with caching)
     # ========================================================================
