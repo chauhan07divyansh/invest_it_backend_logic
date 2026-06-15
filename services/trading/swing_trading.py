@@ -38,6 +38,24 @@ FINBERT_API_SECRET = os.getenv("FINBERT_API_SECRET", "")
 SHADOW_LOG_KEY     = "shadow:sentiment:log"
 _shadow_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 
+# Boilerplate/disclaimer markers — scraper tails that make the window scan
+# fire false negatives on nearly every article. Stripped before scoring.
+_BOILERPLATE_MARKERS = [
+    r'Disclaimer\s*:',
+    r'This article is based on a regulatory filing',
+    r'Investments?\s+in\s+securities\s+market\s+are\s+subject\s+to\s+market\s+risks',
+    r'[Mm]utual\s+fund\s+investments\s+are\s+subject\s+to\s+market\s+risk',
+    r'[Pp]ast\s+performance\s+is\s+not\s+indicative',
+    r'Views?\s+and\s+recommendations?\s+given\s+.{0,40}\s+are\s+their\s+own',
+    r'[Pp]lease\s+consult\s+your\s+.{0,30}advisor',
+    r'Also\s+Read\s*[:|]',
+    r'Also\s+Watch\s*[:|]',
+    r'Download\s+The\s+(Economic\s+Times|Mint)\s+News\s+App',
+    r'Catch\s+all\s+the\s+.{0,60}\s+on\s+Mint',
+]
+import re as _re
+_BOILERPLATE_RE = _re.compile('|'.join(_BOILERPLATE_MARKERS), _re.IGNORECASE)
+
 
 class EnhancedSwingTradingSystem:
     """
@@ -881,34 +899,40 @@ class EnhancedSwingTradingSystem:
     # ========================================================================
     # SENTIMENT ANALYSIS (With caching)
     # ========================================================================
-    def _build_relevance_pattern(self, base_symbol: str, company_name: str):
-        """Regex matching the company in a text snippet.
-        Short symbols (<=4 chars) match case-SENSITIVELY so 'according'
-        can never match 'ACC'."""
-        import re
-        generic = {'limited', 'ltd', 'india', 'company', 'corporation',
-                   'industries', 'enterprises', 'services', 'of', 'the', 'and'}
+    def _strip_boilerplate(self, text: str) -> str:
+        """Cut the article at the first boilerplate/disclaimer marker.
+        Footers like 'Disclaimer:', 'subject to market risks', 'Also Read'
+        are scraper tails that make the 60-word window scan fire false
+        negatives on nearly every article. Only cut if a real body (>200
+        chars) is preserved."""
+        m = _BOILERPLATE_RE.search(text)
+        if m and m.start() > 200:
+            text = text[:m.start()]
+        return text.strip()
+    def _is_relevant(self, text: str, base_symbol: str, company_name: str) -> bool:
+        """Company must appear in the HEADLINE (first sentence / 160 chars),
+        not merely somewhere in the body. Kills 'reliance on oil imports'
+        (the word) and dividend-roundup lists that mention the stock in
+        passing. Short symbols (<=4 chars) match case-sensitively."""
+        head = text.split('.')[0][:160]
+        generic = {'limited', 'ltd', 'india', 'company', 'industries',
+                   'enterprises', 'services', 'corporation', 'of', 'the', 'and'}
         tokens = [t for t in company_name.split()
                   if t.lower() not in generic and len(t) >= 3]
-        terms = []
-        if tokens:
-            terms.append(re.escape(tokens[0]))             # e.g. "Reliance", "Tata"
-        if len(tokens) >= 2:
-            terms.append(re.escape(' '.join(tokens[:2])))  # e.g. "Tata Motors"
-        sym_pat = re.compile(r'\b' + re.escape(base_symbol) + r'\b')  # case-sensitive
-        name_pat = re.compile(r'\b(' + '|'.join(terms) + r')\b',
-                              re.IGNORECASE) if terms else None
-        return sym_pat, name_pat
+        full = ' '.join(tokens[:2]) if len(tokens) >= 2 else (tokens[0] if tokens else base_symbol)
+        sym_pat = _re.compile(r'\b' + _re.escape(base_symbol) + r'\b')  # case-sensitive
+        name_pat = _re.compile(r'\b' + _re.escape(full) + r'\b', _re.IGNORECASE)
+        return bool(sym_pat.search(head)) or bool(name_pat.search(head))
     def fetch_indian_news(self, symbol: str, num_articles: int = 15) -> Optional[List[str]]:
         """
         Fetch FULL news articles using newsapi.ai (Event Registry).
-        v2: title-keyword search + headline/lede relevance post-filter.
+        v3: title-keyword search + headline relevance + boilerplate stripping.
         """
         try:
             if not config.EVENT_REGISTRY_API_KEY:
                 return None
-            # Cache check (v2 key — old unfiltered caches won't be reused)
-            cache_key = self._get_cache_key("news_v2", symbol, limit=num_articles)
+            # v3 cache key — old caches not reused (boilerplate/noise in them)
+            cache_key = self._get_cache_key("news_v3", symbol, limit=num_articles)
             cached = self._get_from_cache(cache_key)
             if cached:
                 return cached.get("articles")
@@ -919,7 +943,7 @@ class EnhancedSwingTradingSystem:
                 "action": "getArticles",
                 "keyword": company_name,
                 "keywordOper": "and",
-                "keywordLoc": "title",      # FIX 1: company must be in TITLE
+                "keywordLoc": "title",
                 "lang": ["eng"],
                 "articlesPage": 1,
                 "articlesCount": num_articles,
@@ -938,7 +962,6 @@ class EnhancedSwingTradingSystem:
                 logger.warning(f"Event Registry HTTP {response.status_code}")
                 return None
             data = response.json()
-            sym_pat, name_pat = self._build_relevance_pattern(base_symbol, company_name)
             articles = []
             dropped = 0
             for item in data.get("articles", {}).get("results", []):
@@ -950,17 +973,19 @@ class EnhancedSwingTradingSystem:
                     text = title
                 else:
                     continue
-                # FIX 2: company must appear in headline/lede (first 600 chars)
-                lede = text[:600]
-                relevant = bool(sym_pat.search(lede)) or \
-                           bool(name_pat and name_pat.search(lede))
-                if relevant:
-                    articles.append(text)
-                else:
+                # FIX B: relevance on headline only
+                if not self._is_relevant(text, base_symbol, company_name):
                     dropped += 1
+                    continue
+                # FIX A: strip boilerplate tail before storing/scoring
+                text = self._strip_boilerplate(text)
+                if len(text) < 100:
+                    dropped += 1
+                    continue
+                articles.append(text)
             if dropped:
                 logger.info(f"📰 {symbol}: kept {len(articles)}, "
-                            f"dropped {dropped} irrelevant articles")
+                            f"dropped {dropped} irrelevant/short articles")
             if articles:
                 self._set_to_cache(
                     cache_key,
