@@ -400,7 +400,12 @@ class EnhancedSwingTradingSystem:
                 "UJJIVAN": {"name": "Ujjivan Small Finance Bank", "sector": "Banking"},
                 "UTIAMC": {"name": "UTI Asset Management", "sector": "Financial Services"},
             }
-            # Remove underperforming stocks from backtest
+            # Full reference (never pruned) — so excluded stocks still resolve
+            # their real sector/name in get_stock_info_from_db. Without this,
+            # RELIANCE/HDFCBANK/TCS return sector="Unknown" (the default),
+            # which would also break any regime sector-exclude on them.
+            self.all_stocks_reference = dict(self.indian_stocks)
+            # Remove underperforming stocks from the SWING UNIVERSE only
             exclude_from_swing = ['RELIANCE', 'HDFCBANK', 'TCS']
             original_count = len(self.indian_stocks)
             self.indian_stocks = {
@@ -628,10 +633,13 @@ class EnhancedSwingTradingSystem:
             return []
     @lru_cache(maxsize=1000)
     def get_stock_info_from_db(self, symbol: str) -> Dict:
-        """Get stock info from database (cached)"""
+        """Get stock info from database (cached).
+        Uses the full unpruned reference so excluded stocks
+        (RELIANCE/HDFCBANK/TCS) still resolve their real sector."""
         try:
             base_symbol = str(symbol).split('.')[0].upper().strip()
-            return self.indian_stocks.get(base_symbol, {"name": symbol, "sector": "Unknown"})
+            ref = getattr(self, 'all_stocks_reference', None) or self.indian_stocks
+            return ref.get(base_symbol, {"name": symbol, "sector": "Unknown"})
         except Exception as e:
             logger.error(f"Error getting stock info for {symbol}: {e}")
             return {"name": str(symbol), "sector": "Unknown"}
@@ -661,6 +669,98 @@ class EnhancedSwingTradingSystem:
         except Exception as e:
             logger.error(f"Error getting sector weights: {e}")
             return 0.55, 0.45
+    # ========================================================================
+    # MARKET REGIME DETECTION (standalone, cached, fail-safe)
+    # Nothing depends on this yet — it only reads data and returns a string.
+    # Zero impact on scoring until wired into allocation in a later deploy.
+    # ========================================================================
+    def detect_market_regime(self, force_refresh: bool = False) -> str:
+        """Classify the current market regime from NIFTY 50 trend.
+        BULL:     price > MA20 > MA50  (uptrend, MAs stacked up)
+        BEAR:     price < MA20 < MA50  (downtrend, MAs stacked down)
+        SIDEWAYS: anything else (default, and the fail-safe)
+        Cached 1h. Fails safe to SIDEWAYS — which applies no exclusions /
+        neutral sizing — so a detection failure never distorts the book."""
+        try:
+            cache_key = "market:regime"
+            if not force_refresh and self.cache_enabled:
+                cached = self._get_from_cache(cache_key)
+                if cached and cached.get("regime"):
+                    return cached["regime"]
+            df = self._fetch_nifty_index()
+            if df is None or df.empty or len(df) < 50:
+                logger.warning("⚠️ Regime: insufficient NIFTY data, defaulting SIDEWAYS")
+                return 'SIDEWAYS'
+            close = df['Close']
+            ma20 = close.rolling(20).mean().iloc[-1]
+            ma50 = close.rolling(50).mean().iloc[-1]
+            current = close.iloc[-1]
+            if any(pd.isna(x) for x in (current, ma20, ma50)):
+                return 'SIDEWAYS'
+            if current > ma20 > ma50:
+                regime = 'BULL'
+            elif current < ma20 < ma50:
+                regime = 'BEAR'
+            else:
+                regime = 'SIDEWAYS'
+            pct_vs_ma50 = (current - ma50) / ma50 * 100
+            logger.info(f"📊 Market regime: {regime} "
+                        f"(NIFTY {current:.0f}, MA20 {ma20:.0f}, MA50 {ma50:.0f}, "
+                        f"{pct_vs_ma50:+.1f}% vs MA50)")
+            if self.cache_enabled:
+                self._set_to_cache(cache_key, {
+                    "regime": regime,
+                    "nifty": float(current),
+                    "ma20": float(ma20),
+                    "ma50": float(ma50),
+                    "computed_at": datetime.now().isoformat(),
+                }, 3600)
+            return regime
+        except Exception as e:
+            logger.error(f"Regime detection failed, defaulting SIDEWAYS: {e}")
+            return 'SIDEWAYS'
+    def _fetch_nifty_index(self):
+        """Fetch NIFTY 50 index OHLCV. Index symbols don't use the -EQ equity
+        path, so this calls the data provider directly with index candidates.
+        Returns a DataFrame with a 'Close' column, or None."""
+        candidates = [
+            "NSE:NIFTY50-INDEX",
+            "NSE:NIFTY 50",
+            "NIFTY50",
+            "NIFTY 50",
+        ]
+        for sym in candidates:
+            try:
+                cache_key = self._get_cache_key("ohlcv_index", sym, period="3mo")
+                cached = self._get_from_cache(cache_key)
+                if cached:
+                    df = pd.DataFrame(cached['ohlcv'])
+                    df['Date'] = pd.to_datetime(df['date'])
+                    df = df.set_index('Date').drop(columns=['date'])
+                    df.columns = ['Open', 'High', 'Low', 'Close', 'Volume']
+                    return df
+                stock_data = self.data_provider.get_stock_data(
+                    symbol=sym,
+                    fetch_ohlcv=True,
+                    fetch_fundamentals=False,
+                    period="3mo",
+                )
+                ohlcv_list = stock_data.get('ohlcv')
+                if not ohlcv_list:
+                    continue
+                df = pd.DataFrame(ohlcv_list)
+                df['Date'] = pd.to_datetime(df['date'])
+                df = df.set_index('Date')
+                df = df[['open', 'high', 'low', 'close', 'volume']]
+                df.columns = ['Open', 'High', 'Low', 'Close', 'Volume']
+                self._set_to_cache(cache_key, {'ohlcv': ohlcv_list}, 3600)
+                logger.info(f"📈 NIFTY index fetched via '{sym}' ({len(df)} days)")
+                return df
+            except Exception as e:
+                logger.debug(f"NIFTY fetch via '{sym}' failed: {e}")
+                continue
+        logger.warning("⚠️ Could not fetch NIFTY index via any symbol candidate")
+        return None
     # ========================================================================
     # DATA FETCHING METHODS (Updated with caching)
     # ========================================================================
@@ -1381,22 +1481,53 @@ class EnhancedSwingTradingSystem:
     # ========================================================================
     # PORTFOLIO GENERATION
     # ========================================================================
+    # Sectors to AVOID in a bear market (cyclical / risk-off underperformers).
+    # Empty in sideways/bull — no exclusions when the market isn't falling.
+    REGIME_EXCLUDE = {
+        'BEAR':     ['Oil & Gas', 'Metals', 'Mining', 'Steel', 'Cement'],
+        'SIDEWAYS': [],
+        'BULL':     [],
+    }
+    # Max positions per sector — tighter in bear (avoid correlated pairs like
+    # IOC+BPCL or CANBK+PNB falling together), looser in bull.
+    MAX_PER_SECTOR = {'BEAR': 1, 'SIDEWAYS': 2, 'BULL': 2}
     def filter_stocks_by_risk_appetite(self, results: List[Dict], risk_appetite: str) -> List[Dict]:
-        """Filter stocks by risk appetite"""
+        """Filter stocks by risk appetite, market regime, and sector concentration.
+        - volatility cap by risk appetite (unchanged)
+        - regime sector EXCLUDE: drop risk-off sectors in a bear market
+        - sector CAP: limit correlated names per sector (Issue 3)
+        Results are assumed score-sorted (analyze_stocks_parallel sorts desc),
+        so the sector cap keeps the HIGHEST-scoring stock in each sector."""
         try:
-            risk_thresholds = {
-                'LOW': 0.25,
-                'MEDIUM': 0.40,
-                'HIGH': 1.0
-            }
+            risk_thresholds = {'LOW': 0.25, 'MEDIUM': 0.40, 'HIGH': 1.0}
             max_volatility = risk_thresholds.get(risk_appetite.upper(), 0.40)
+            regime = self.detect_market_regime()
+            exclude_sectors = self.REGIME_EXCLUDE.get(regime, [])
+            max_per_sector = self.MAX_PER_SECTOR.get(regime, 2)
             filtered = []
+            sector_count = {}
+            dropped_regime = dropped_sectorcap = 0
             for stock in results:
                 volatility = stock.get('risk_metrics', {}).get('volatility', 1.0)
                 entry_signal = stock.get('trading_plan', {}).get('entry_signal', 'HOLD')
-                if volatility <= max_volatility and entry_signal in ['BUY', 'STRONG BUY']:
-                    filtered.append(stock)
-            logger.info(f"Filtered {len(filtered)}/{len(results)} stocks for {risk_appetite} risk")
+                sector = stock.get('sector', 'Unknown')
+                if not (volatility <= max_volatility and entry_signal in ['BUY', 'STRONG BUY']):
+                    continue
+                # regime sector exclusion (bear market risk-off)
+                if sector in exclude_sectors:
+                    dropped_regime += 1
+                    continue
+                # sector concentration cap
+                if sector_count.get(sector, 0) >= max_per_sector:
+                    dropped_sectorcap += 1
+                    continue
+                sector_count[sector] = sector_count.get(sector, 0) + 1
+                filtered.append(stock)
+            logger.info(
+                f"Filtered {len(filtered)}/{len(results)} for {risk_appetite} risk "
+                f"[regime={regime}, max {max_per_sector}/sector"
+                f"{f', excluded {exclude_sectors}' if exclude_sectors else ''}; "
+                f"dropped {dropped_regime} regime, {dropped_sectorcap} sectorcap]")
             return filtered
         except Exception as e:
             logger.error(f"Error filtering stocks: {e}")
