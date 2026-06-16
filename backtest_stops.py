@@ -1,21 +1,3 @@
-"""
-STOP-LOSS BACKTEST — old (fixed 1.5x ATR) vs new (regime-adaptive + hard cap).
-Standalone. Imports the live system, walks each stock's OHLCV history, simulates
-both stop regimes on identical entries, reports the 4 metrics + profit factor.
-
-Run in Render shell:
-    python3 backtest_stops.py
-
-Honest limits (read before trusting numbers):
-  - IN-SAMPLE on the same ~6mo window. Bear-tuned stops flatter themselves on a
-    window containing the bear phase. Treat as RELATIVE (old vs new), not absolute.
-  - No slippage/commission. Real fills are worse, and worse MORE for the
-    higher-stop-out new system — so its real edge is below what prints here.
-  - Intraday stop/target hits approximated from daily High/Low (did the bar's
-    low pierce the stop? did the high reach the target?). If BOTH hit same day,
-    assume STOP first (conservative).
-  - Entry rule = same signal the live system uses (score >= 60 => BUY/STRONG BUY).
-"""
 import sys, os
 sys.path.insert(0, '/app')
 import numpy as np
@@ -24,42 +6,43 @@ from main import trading_api
 
 sws = trading_api.swing_system
 
-# ---- knobs (match generate_trading_plan) --------------------------------
-HOLD_DAYS       = 20          # max bars to hold (swing 1-4wk); exit at close if neither hit
-ENTRY_MIN_SCORE = 60          # BUY threshold
-LOOKBACK_BARS   = 120         # ~6mo of daily bars to scan for entries
-WARMUP          = 50          # need 50 bars for MAs before first entry
+# Sweep these holding periods
+HOLD_PERIODS = [5, 7, 10, 14, 20]
+ENTRY_MIN_SCORE = 60
+LOOKBACK_BARS = 120
+WARMUP = 50
 
-OLD = dict(stop_mult=1.5, max_sl_pct=None, t1=1.0, t2=1.5, t3=2.0)
+# Round-trip transaction cost (buy + sell), in percent. Indian retail:
+# ~0.1-0.3% all-in (brokerage + STT + slippage). 0.15% is a fair default.
+COST_PCT = 0.15
+
+# Stop config to test the sweep under. Using the NEW adaptive stop so the
+# horizon choice reflects the system you intend to ship.
 NEW = {
-    'BEAR':     dict(stop_mult=0.8, max_sl_pct=0.05, t1=1.0, t2=1.3, t3=1.7),
+    'BEAR': dict(stop_mult=0.8, max_sl_pct=0.05, t1=1.0, t2=1.3, t3=1.7),
     'SIDEWAYS': dict(stop_mult=1.0, max_sl_pct=0.08, t1=1.0, t2=1.5, t3=2.0),
-    'BULL':     dict(stop_mult=1.5, max_sl_pct=0.12, t1=1.0, t2=1.5, t3=2.0),
+    'BULL': dict(stop_mult=1.5, max_sl_pct=0.12, t1=1.0, t2=1.5, t3=2.0),
 }
 
 def atr_at(df, i, period=14):
-    """ATR using bars up to index i (inclusive)."""
     h, l, c = df['High'], df['Low'], df['Close']
     tr = pd.concat([h - l, (h - c.shift()).abs(), (l - c.shift()).abs()], axis=1).max(axis=1)
     return tr.iloc[max(0, i - period + 1):i + 1].mean()
 
 def regime_at(df, i):
-    """Same logic as detect_market_regime but on the STOCK's own MAs at bar i
-    (proxy — we don't have point-in-time NIFTY history cheaply here; the stock's
-    own trend is a reasonable per-name regime proxy for stop sizing)."""
     c = df['Close']
     if i < WARMUP:
         return 'SIDEWAYS'
     cur = c.iloc[i]
     ma20 = c.iloc[i-19:i+1].mean()
     ma50 = c.iloc[i-49:i+1].mean()
-    if cur > ma20 > ma50: return 'BULL'
-    if cur < ma20 < ma50: return 'BEAR'
+    if cur > ma20 > ma50:
+        return 'BULL'
+    if cur < ma20 < ma50:
+        return 'BEAR'
     return 'SIDEWAYS'
 
-def simulate(df, entry_i, cfg, normal_atr):
-    """Walk forward from entry. Return (outcome, pct_move).
-    outcome in {'TP1','TP2','TP3','STOP','TIME'}."""
+def simulate(df, entry_i, cfg, normal_atr, hold_days):
     entry = df['Close'].iloc[entry_i]
     sl_dist = normal_atr * cfg['stop_mult']
     if cfg['max_sl_pct'] is not None:
@@ -69,43 +52,48 @@ def simulate(df, entry_i, cfg, normal_atr):
     t1 = entry + normal * cfg['t1']
     t2 = entry + normal * cfg['t2']
     t3 = entry + normal * cfg['t3']
-    for j in range(entry_i + 1, min(entry_i + 1 + HOLD_DAYS, len(df))):
+    gross = None
+    for j in range(entry_i + 1, min(entry_i + 1 + hold_days, len(df))):
         lo, hi = df['Low'].iloc[j], df['High'].iloc[j]
-        # conservative: stop checked before target on same bar
         if lo <= stop:
-            return 'STOP', (stop - entry) / entry * 100
+            gross = (stop - entry) / entry * 100; break
         if hi >= t3:
-            return 'TP3', (t3 - entry) / entry * 100
+            gross = (t3 - entry) / entry * 100; break
         if hi >= t2:
-            return 'TP2', (t2 - entry) / entry * 100
+            gross = (t2 - entry) / entry * 100; break
         if hi >= t1:
-            return 'TP1', (t1 - entry) / entry * 100
-    # time exit at last close
-    exit_px = df['Close'].iloc[min(entry_i + HOLD_DAYS, len(df) - 1)]
-    return 'TIME', (exit_px - entry) / entry * 100
+            gross = (t1 - entry) / entry * 100; break
+    if gross is None:
+        exit_px = df['Close'].iloc[min(entry_i + hold_days, len(df) - 1)]
+        gross = (exit_px - entry) / entry * 100
+    return gross - COST_PCT  # net of round-trip cost
 
 def metrics(trades):
-    """trades = list of pct moves. Return dict of the 4 metrics + PF."""
     if not trades:
         return None
     arr = np.array(trades)
     wins = arr[arr > 0]; losses = arr[arr < 0]
-    win_rate = len(wins) / len(arr) * 100
-    avg_win = wins.mean() if len(wins) else 0
-    avg_loss = losses.mean() if len(losses) else 0
-    gross_win = wins.sum() if len(wins) else 0
-    gross_loss = -losses.sum() if len(losses) else 0
-    pf = gross_win / gross_loss if gross_loss > 0 else float('inf')
-    expectancy = arr.mean()
-    return dict(n=len(arr), win_rate=win_rate, avg_win=avg_win,
-                avg_loss=avg_loss, profit_factor=pf, expectancy=expectancy)
+    gw = wins.sum() if len(wins) else 0
+    gl = -losses.sum() if len(losses) else 0
+    pf = gw / gl if gl > 0 else 999.0
+    return dict(
+        n=len(arr),
+        win_rate=len(wins)/len(arr)*100,
+        avg_win=wins.mean() if len(wins) else 0,
+        avg_loss=losses.mean() if len(losses) else 0,
+        pf=pf,
+        expectancy=arr.mean(),
+    )
 
 def run():
     symbols = sws.get_all_stock_symbols()
-    print(f"Backtesting stops on {len(symbols)} stocks "
-          f"({LOOKBACK_BARS} bars, {HOLD_DAYS}-day hold)...\n")
-    old_trades, new_trades = [], []
-    regime_counts = {'BULL':0,'BEAR':0,'SIDEWAYS':0}
+    maxhold = max(HOLD_PERIODS)
+    print("Holding-period sweep, NET of", COST_PCT, "pct round-trip cost")
+    print("Scanning", len(symbols), "stocks...\n")
+
+    # Collect entries once, then evaluate each entry across all hold periods
+    # so every period is tested on IDENTICAL entries (clean comparison).
+    by_hold = {h: [] for h in HOLD_PERIODS}
     n_ok = 0
     for k, sym in enumerate(symbols):
         try:
@@ -114,10 +102,9 @@ def run():
                 continue
             df = df.tail(LOOKBACK_BARS + WARMUP).reset_index(drop=True)
             n_ok += 1
-            # generate entries from the scoring engine's signal, walked historically
-            for i in range(WARMUP, len(df) - HOLD_DAYS):
+            for i in range(WARMUP, len(df) - maxhold):
                 window = df.iloc[:i+1]
-                sent = ([], [], [], "None", "Sample")  # neutral — backtest stops, not sentiment
+                sent = ([], [], [], "None", "Sample")
                 score = sws.calculate_swing_trading_score(window, sent, "Unknown")
                 if score < ENTRY_MIN_SCORE:
                     continue
@@ -125,40 +112,46 @@ def run():
                 if not a or a <= 0 or pd.isna(a):
                     continue
                 rg = regime_at(df, i)
-                regime_counts[rg] += 1
-                _, old_pct = simulate(df, i, OLD, a)
-                _, new_pct = simulate(df, i, NEW[rg], a)
-                old_trades.append(old_pct)
-                new_trades.append(new_pct)
+                cfg = NEW[rg]
+                for h in HOLD_PERIODS:
+                    by_hold[h].append(simulate(df, i, cfg, a, h))
             if (k+1) % 40 == 0:
-                print(f"  ...{k+1}/{len(symbols)} scanned, {len(old_trades)} trades so far")
-        except Exception as e:
+                print("  ", k+1, "/", len(symbols), "scanned")
+        except Exception:
             continue
 
-    print(f"\nScanned {n_ok} stocks. Entry regime mix: {regime_counts}")
-    print(f"Total simulated trades: {len(old_trades)}\n")
-    mo, mn = metrics(old_trades), metrics(new_trades)
-    if not mo or not mn:
-        print("Not enough trades."); return
-    print("="*64)
-    print(f"{'METRIC':<18}{'OLD (1.5xATR)':>16}{'NEW (regime+cap)':>18}")
-    print("-"*64)
-    print(f"{'Trades':<18}{mo['n']:>16}{mn['n']:>18}")
-    print(f"{'Win rate %':<18}{mo['win_rate']:>16.1f}{mn['win_rate']:>18.1f}")
-    print(f"{'Avg win %':<18}{mo['avg_win']:>16.2f}{mn['avg_win']:>18.2f}")
-    print(f"{'Avg loss %':<18}{mo['avg_loss']:>16.2f}{mn['avg_loss']:>18.2f}")
-    print(f"{'Expectancy %':<18}{mo['expectancy']:>16.3f}{mn['expectancy']:>18.3f}")
-    print(f"{'PROFIT FACTOR':<18}{mo['profit_factor']:>16.3f}{mn['profit_factor']:>18.3f}")
-    print("="*64)
-    pf_delta = mn['profit_factor'] - mo['profit_factor']
-    print(f"\nProfit factor change: {pf_delta:+.3f}")
-    if pf_delta > 0.05:
-        print("✅ NEW stops improve profit factor — ship it.")
-    elif pf_delta < -0.05:
-        print("❌ NEW stops REDUCE profit factor — over-tightened. Loosen bear cap (5%→7%) and re-run.")
-    else:
-        print("➖ Roughly neutral — the change is safe but not a clear win. Judge on avg-loss reduction.")
-    print("\nReminder: in-sample, no costs. Treat as relative signal, not a return forecast.")
+    print("\nScanned", n_ok, "stocks.")
+    print("=" * 70)
+    print("HOLD".rjust(5), "TRADES".rjust(9), "WIN%".rjust(8), "AVG_W".rjust(8),
+          "AVG_L".rjust(8), "EXPECT".rjust(9), "PF".rjust(8))
+    print("-" * 70)
+    best_pf = -1; best_h = None
+    best_exp = -1; best_h_exp = None
+    for h in HOLD_PERIODS:
+        m = metrics(by_hold[h])
+        if not m:
+            continue
+        print(str(h).rjust(5), str(m['n']).rjust(9),
+              ("%.1f" % m['win_rate']).rjust(8),
+              ("%.2f" % m['avg_win']).rjust(8),
+              ("%.2f" % m['avg_loss']).rjust(8),
+              ("%.3f" % m['expectancy']).rjust(9),
+              ("%.3f" % m['pf']).rjust(8))
+        if m['pf'] > best_pf:
+            best_pf = m['pf']; best_h = h
+        if m['expectancy'] > best_exp:
+            best_exp = m['expectancy']; best_h_exp = h
+    print("=" * 70)
+    print("Best PF        : %d-day hold (PF %.3f)" % (best_h, best_pf))
+    print("Best expectancy: %d-day hold (%.3f%% per trade)" % (best_h_exp, best_exp))
+    print("\nNote: in-sample, stock-trend regime proxy, %.2f%% cost applied." % COST_PCT)
+    print("Expectancy is per-trade; shorter holds free capital faster so")
+    print("compare expectancy-per-day too, not just per-trade PF.")
+    print("\nExpectancy PER DAY held (capital-efficiency view):")
+    for h in HOLD_PERIODS:
+        m = metrics(by_hold[h])
+        if m:
+            print("  %2d-day: %.4f%%/day" % (h, m['expectancy'] / h))
 
 if __name__ == "__main__":
     run()
