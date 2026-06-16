@@ -43,8 +43,8 @@ POSITION_TRADING_PARAMS = {
 }
 
 SWING_TRADING_PARAMS = {
-    'min_holding_period':       3,
-    'max_holding_period':       30,
+    'min_holding_period':       2,
+    'max_holding_period':       10,
     'risk_per_trade':           0.02,
     'max_portfolio_risk':       0.10,
     'profit_target_multiplier': 2.5,
