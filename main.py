@@ -87,6 +87,45 @@ class LoginAudit(db.Model):
     failure_reason = db.Column(db.String(100), nullable=True)
     created_at     = db.Column(db.DateTime, default=datetime.utcnow, index=True)
 
+class WatchlistItem(db.Model):
+    __tablename__ = 'watchlist_items'
+    id          = db.Column(db.Integer, primary_key=True)
+    user_id     = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    symbol      = db.Column(db.String(32), nullable=False, index=True)
+    source      = db.Column(db.String(16), default='analyzed')
+    last_signal = db.Column(db.String(16))
+    last_score  = db.Column(db.Float)
+    last_price  = db.Column(db.Float)
+    stop_loss   = db.Column(db.Float)
+    target_1    = db.Column(db.Float)
+    target_2    = db.Column(db.Float)
+    target_3    = db.Column(db.Float)
+    active      = db.Column(db.Boolean, default=True)
+    created_at  = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at  = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    __table_args__ = (db.UniqueConstraint('user_id', 'symbol', name='uq_user_symbol'),)
+
+class NotificationPref(db.Model):
+    __tablename__ = 'notification_prefs'
+    id                = db.Column(db.Integer, primary_key=True)
+    user_id           = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, unique=True, index=True)
+    email_enabled     = db.Column(db.Boolean, default=True)
+    push_enabled      = db.Column(db.Boolean, default=False)
+    push_subscription = db.Column(db.Text)
+    max_per_day       = db.Column(db.Integer, default=5)
+    created_at        = db.Column(db.DateTime, default=datetime.utcnow)
+
+class NotificationLog(db.Model):
+    __tablename__ = 'notification_log'
+    id         = db.Column(db.Integer, primary_key=True)
+    user_id    = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    symbol     = db.Column(db.String(32), nullable=False)
+    kind       = db.Column(db.String(32))
+    detail     = db.Column(db.String(255))
+    dedupe_key = db.Column(db.String(128), index=True)
+    channel    = db.Column(db.String(16))
+    sent_at    = db.Column(db.DateTime, default=datetime.utcnow)
+
 with app.app_context():
     db.create_all()
 # ── Rate limiter ──────────────────────────────────────────────────────────────
@@ -793,6 +832,37 @@ class TradingAPI:
             'total_budget': budget, 'total_allocated': total_alloc,
             'remaining_cash': budget - total_alloc, 'diversification': len(std), 'average_score': avg_score}}
 
+def save_to_watchlist(user_id, analysis_payload, source='analyzed'):
+    """Add/refresh a watchlist row from a RAW analysis result dict.
+    Silently returns for guests (user_id None); never raises into the request."""
+    if not user_id or not analysis_payload:
+        return
+    try:
+        symbol = analysis_payload.get('symbol')
+        if not symbol:
+            return
+        plan    = analysis_payload.get('trading_plan', {}) or {}
+        targets = plan.get('targets', {}) or {}
+        item = WatchlistItem.query.filter_by(user_id=user_id, symbol=symbol).first()
+        if item is None:
+            item = WatchlistItem(user_id=user_id, symbol=symbol, source=source)
+            db.session.add(item)
+        item.last_signal = plan.get('entry_signal')
+        item.last_score  = analysis_payload.get('swing_score')
+        item.last_price  = analysis_payload.get('current_price')
+        item.stop_loss   = plan.get('stop_loss')
+        item.target_1    = targets.get('target_1')
+        item.target_2    = targets.get('target_2')
+        item.target_3    = targets.get('target_3')
+        item.active      = True
+        item.updated_at  = datetime.utcnow()
+        if source == 'portfolio':
+            item.source = 'portfolio'
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        logger.warning(f"[watchlist] save failed user={user_id}: {e}")
+
 trading_api = TradingAPI()
 # ── Blueprint v1 ──────────────────────────────────────────────────────────────
 v1 = Blueprint('v1', __name__, url_prefix='/api/v1')
@@ -1167,6 +1237,8 @@ def analyze_stock(system_type: str, symbol: str):
         result        = _fetch_with_retry(analysis_func, symbol)
         if not result:
             return jsonify({'success': False, 'error': f'Could not analyze {symbol}'}), 404
+        if user_id and system_type == 'swing':
+            save_to_watchlist(user_id, result, source='analyzed')
         formatted = trading_api.format_analysis_response(result, system_type.capitalize())
         set_cache(cache_key, formatted)
         return jsonify({'success': True, 'data': formatted, 'source': 'live'})
