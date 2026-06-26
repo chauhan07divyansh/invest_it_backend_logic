@@ -903,30 +903,40 @@ def _detect_changes_for_item(item, fresh):
                 break
     return changes, new_signal, new_price, plan
 
-def _get_fresh_for_symbol(symbol):
-    """Reuse cached analysis (per user's choice). Cache key matches analyze_stock:
-    f'swing_analysis_{symbol}'. But that's the FORMATTED dict — we need raw fields.
-    The formatted dict has trading_plan + current_price + overall_score, so we map
-    it back to the shape _detect_changes_for_item expects."""
+def get_fresh_for_symbol(symbol):
+    """Analyze the symbol fresh for the daily job. Returns the RAW analysis dict
+    (trading_plan.entry_signal, stop_loss, targets.target_1/2/3, current_price,
+    swing_score) — the same shape save_to_watchlist + _detect_changes_for_item
+    expect. Falls back to cached analysis if a live analyze fails. Returns None
+    only if both fail."""
+    # 1) try a cheap cache read first (if a user just viewed it, reuse)
+    cached_raw = get_from_cache(f"swing_raw_{symbol}")
+    if cached_raw:
+        return cached_raw
+    # 2) analyze fresh (authoritative; gives raw entry_signal + all targets)
+    try:
+        result = trading_api.swing_system.analyze_swing_trading_stock(symbol)
+        if result:
+            # cache the RAW dict 1h so repeat runs same day are cheap
+            set_cache(f"swing_raw_{symbol}", result, 3600)
+            return result
+    except Exception as e:
+        logger.warning(f"[notify] fresh analyze failed for {symbol}: {e}")
+    # 3) last-resort: the formatted cache (approximate targets)
     cached = get_from_cache(f"swing_analysis_{symbol}")
-    if not cached:
-        return None
-    # formatted -> raw-ish shape
-    tp = cached.get('trading_plan', {}) or {}
-    # formatted trading_plan has 'signal' (normalized) not 'entry_signal'
-    entry_signal = tp.get('signal') or tp.get('entry_signal')
-    return {
-        'symbol': cached.get('symbol', symbol),
-        'current_price': cached.get('current_price'),
-        'swing_score': cached.get('overall_score'),
-        'trading_plan': {
-            'entry_signal': entry_signal,
-            'stop_loss': tp.get('stop_loss'),
-            'targets': {
-                'target_1': cached.get('target_price'),  # best-effort; see note
+    if cached:
+        tp = cached.get('trading_plan', {}) or {}
+        return {
+            'symbol': cached.get('symbol', symbol),
+            'current_price': cached.get('current_price'),
+            'swing_score': cached.get('overall_score'),
+            'trading_plan': {
+                'entry_signal': tp.get('signal') or tp.get('entry_signal'),
+                'stop_loss': tp.get('stop_loss'),
+                'targets': {'target_1': cached.get('target_price')},
             },
-        },
-    }
+        }
+    return None
 
 def run_notification_job():
     """Scan all active watchlist items, detect changes vs stored state, log them
@@ -940,7 +950,7 @@ def run_notification_job():
 
     for item in items:
         scanned += 1
-        fresh = _get_fresh_for_symbol(item.symbol)
+        fresh = get_fresh_for_symbol(item.symbol)
         if not fresh:
             continue
         changes, new_signal, new_price, plan = _detect_changes_for_item(item, fresh)
