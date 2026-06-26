@@ -905,24 +905,27 @@ def _detect_changes_for_item(item, fresh):
 
 def get_fresh_for_symbol(symbol):
     """Analyze the symbol fresh for the daily job. Returns the RAW analysis dict
-    (trading_plan.entry_signal, stop_loss, targets.target_1/2/3, current_price,
-    swing_score) — the same shape save_to_watchlist + _detect_changes_for_item
-    expect. Falls back to cached analysis if a live analyze fails. Returns None
-    only if both fail."""
-    # 1) try a cheap cache read first (if a user just viewed it, reuse)
+    in the shape _detect_changes_for_item expects. The analyzer needs the BARE
+    ticker (e.g. 'INFY'), but watchlist stores 'INFY.NSE' — so strip the suffix.
+    Falls back to formatted cache if the live analyze fails. None only if all fail."""
+    # cheap reuse if a recent run already analyzed it
     cached_raw = get_from_cache(f"swing_raw_{symbol}")
     if cached_raw:
         return cached_raw
-    # 2) analyze fresh (authoritative; gives raw entry_signal + all targets)
+    # analyzer wants the bare ticker — strip exchange suffix
+    bare = symbol.replace('.NSE', '').replace('.BSE', '').strip().upper()
     try:
-        result = trading_api.swing_system.analyze_swing_trading_stock(symbol)
+        result = trading_api.swing_system.analyze_swing_trading_stock(bare)
         if result:
-            # cache the RAW dict 1h so repeat runs same day are cheap
+            # ensure the result carries the watchlist's stored symbol form so
+            # downstream comparisons/keys stay consistent
+            if not result.get('symbol'):
+                result['symbol'] = symbol
             set_cache(f"swing_raw_{symbol}", result, 3600)
             return result
     except Exception as e:
-        logger.warning(f"[notify] fresh analyze failed for {symbol}: {e}")
-    # 3) last-resort: the formatted cache (approximate targets)
+        logger.warning(f"[notify] fresh analyze failed for {symbol} (bare={bare}): {e}")
+    # last resort: formatted cache (approximate single target)
     cached = get_from_cache(f"swing_analysis_{symbol}")
     if cached:
         tp = cached.get('trading_plan', {}) or {}
