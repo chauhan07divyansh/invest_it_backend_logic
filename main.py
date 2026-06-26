@@ -863,6 +863,172 @@ def save_to_watchlist(user_id, analysis_payload, source='analyzed'):
         db.session.rollback()
         logger.warning(f"[watchlist] save failed user={user_id}: {e}")
 
+# ── Watchlist notifications — detection + email digest ────────────────────────
+def _signal_rank(sig):
+    """Order signals so we can tell 'improved' vs 'weakened'."""
+    order = {'STRONG SELL': 0, 'SELL': 1, 'HOLD/WATCH': 2, 'BUY': 3, 'STRONG BUY': 4}
+    return order.get((sig or '').upper(), 2)
+
+def _detect_changes_for_item(item, fresh):
+    """Compare a watchlist item's STORED state vs a FRESH analysis dict.
+    Returns a list of (kind, message) change tuples. Observational wording only —
+    never 'buy/sell'. fresh = raw analysis result dict (trading_plan, swing_score,
+    current_price)."""
+    changes = []
+    plan = (fresh or {}).get('trading_plan', {}) or {}
+    new_signal = plan.get('entry_signal')
+    new_price  = (fresh or {}).get('current_price')
+    sym = item.symbol
+
+    # 1) Signal flip (only if both known and the bucket actually changed)
+    if item.last_signal and new_signal and new_signal != item.last_signal:
+        old_r, new_r = _signal_rank(item.last_signal), _signal_rank(new_signal)
+        if new_r > old_r:
+            changes.append(('signal_flip',
+                f"{sym}: technical alignment strengthened ({item.last_signal} → {new_signal})."))
+        elif new_r < old_r:
+            changes.append(('signal_flip',
+                f"{sym}: technical alignment weakened ({item.last_signal} → {new_signal})."))
+
+    # 2) Stop / target level hits (need a price and the stored levels)
+    if new_price and item.stop_loss and new_price <= item.stop_loss:
+        changes.append(('stop_hit',
+            f"{sym}: price (₹{new_price:.2f}) reached your stop-loss reference level (₹{item.stop_loss:.2f})."))
+    elif new_price:
+        # report the HIGHEST target reached (3 > 2 > 1)
+        for tnum, tval in (('3', item.target_3), ('2', item.target_2), ('1', item.target_1)):
+            if tval and new_price >= tval:
+                changes.append(('target_hit',
+                    f"{sym}: price (₹{new_price:.2f}) reached resistance reference R{tnum} (₹{tval:.2f})."))
+                break
+    return changes, new_signal, new_price, plan
+
+def _get_fresh_for_symbol(symbol):
+    """Reuse cached analysis (per user's choice). Cache key matches analyze_stock:
+    f'swing_analysis_{symbol}'. But that's the FORMATTED dict — we need raw fields.
+    The formatted dict has trading_plan + current_price + overall_score, so we map
+    it back to the shape _detect_changes_for_item expects."""
+    cached = get_from_cache(f"swing_analysis_{symbol}")
+    if not cached:
+        return None
+    # formatted -> raw-ish shape
+    tp = cached.get('trading_plan', {}) or {}
+    # formatted trading_plan has 'signal' (normalized) not 'entry_signal'
+    entry_signal = tp.get('signal') or tp.get('entry_signal')
+    return {
+        'symbol': cached.get('symbol', symbol),
+        'current_price': cached.get('current_price'),
+        'swing_score': cached.get('overall_score'),
+        'trading_plan': {
+            'entry_signal': entry_signal,
+            'stop_loss': tp.get('stop_loss'),
+            'targets': {
+                'target_1': cached.get('target_price'),  # best-effort; see note
+            },
+        },
+    }
+
+def run_notification_job():
+    """Scan all active watchlist items, detect changes vs stored state, log them
+    (deduped), email each user a single digest, then update stored state.
+    Returns a summary dict. Safe to call repeatedly (dedupe prevents repeats)."""
+    from collections import defaultdict
+    today = datetime.utcnow().strftime('%Y-%m-%d')
+    items = WatchlistItem.query.filter_by(active=True).all()
+    per_user = defaultdict(list)   # user_id -> [(kind, message)]
+    scanned = changed = 0
+
+    for item in items:
+        scanned += 1
+        fresh = _get_fresh_for_symbol(item.symbol)
+        if not fresh:
+            continue
+        changes, new_signal, new_price, plan = _detect_changes_for_item(item, fresh)
+        for kind, msg in changes:
+            dedupe = f"{item.symbol}:{kind}:{today}"
+            exists = NotificationLog.query.filter_by(
+                user_id=item.user_id, dedupe_key=dedupe).first()
+            if exists:
+                continue
+            db.session.add(NotificationLog(
+                user_id=item.user_id, symbol=item.symbol, kind=kind,
+                detail=msg[:255], dedupe_key=dedupe, channel='pending'))
+            per_user[item.user_id].append((kind, msg))
+            changed += 1
+        # update stored state so tomorrow compares against today
+        if new_signal:
+            item.last_signal = new_signal
+        if new_price:
+            item.last_price = new_price
+        if plan.get('stop_loss'):
+            item.stop_loss = plan.get('stop_loss')
+    db.session.commit()
+
+    # email each user a single digest (respect prefs + daily cap)
+    emailed = 0
+    for user_id, msgs in per_user.items():
+        if not msgs:
+            continue
+        user = User.query.get(user_id)
+        if not user or not user.email:
+            continue
+        pref = NotificationPref.query.filter_by(user_id=user_id).first()
+        if pref and not pref.email_enabled:
+            continue
+        cap = (pref.max_per_day if pref else 5)
+        send_msgs = msgs[:cap]
+        if _send_watchlist_email(user.email, send_msgs):
+            emailed += 1
+            for kind, _m in send_msgs:
+                row = (NotificationLog.query
+                       .filter_by(user_id=user_id, channel='pending')
+                       .order_by(NotificationLog.id.desc()).first())
+                if row:
+                    row.channel = 'email'
+            db.session.commit()
+    return {'scanned': scanned, 'changes': changed,
+            'users_emailed': emailed, 'date': today}
+
+def _send_watchlist_email(to_email, msgs):
+    """Send ONE digest email listing the changes. Reuses SMTP env vars.
+    Observational wording + disclaimer. Returns True on success."""
+    smtp_host = os.getenv("SMTP_HOST")
+    if not smtp_host:
+        logger.info(f"[notify][DEV] would email {to_email}: {[m for _,m in msgs]}")
+        return True  # treat as sent in dev
+    lines = "".join(
+        f'<tr><td style="padding:10px 0;border-bottom:1px solid #1e2130;color:#fff;font-size:14px">{m}</td></tr>'
+        for _k, m in msgs)
+    html = f"""
+    <div style="font-family:sans-serif;max-width:600px;margin:0 auto;background:#0f1117;color:#fff;border-radius:12px;overflow:hidden">
+      <div style="padding:24px 32px;border-bottom:1px solid #1e2130">
+        <span style="font-size:20px;font-weight:bold">⚡ SentiQuant</span>
+        <p style="color:#8b8fa8;margin:4px 0 0;font-size:13px">Watchlist update</p>
+      </div>
+      <div style="padding:24px 32px">
+        <p style="color:#8b8fa8;font-size:13px;margin:0 0 12px">Technical changes on stocks you've analyzed:</p>
+        <table style="width:100%;border-collapse:collapse">{lines}</table>
+        <p style="color:#8b8fa8;font-size:11px;margin-top:20px;line-height:1.5">
+          These are AI-generated technical observations, not investment advice.
+          SentiQuant is not SEBI-registered. Past performance is not indicative of
+          future results. Always do your own research.</p>
+      </div>
+    </div>"""
+    msg = MIMEText(html, 'html')
+    msg['Subject'] = f"SentiQuant: {len(msgs)} watchlist update{'s' if len(msgs)>1 else ''}"
+    msg['From']    = os.getenv("SMTP_USER")
+    msg['To']      = to_email
+    try:
+        with smtplib.SMTP(smtp_host, int(os.getenv("SMTP_PORT", 587))) as server:
+            server.starttls()
+            server.login(os.getenv("SMTP_USER"), os.getenv("SMTP_PASS"))
+            server.sendmail(msg['From'], [to_email], msg.as_string())
+        logger.info(f"[notify] digest emailed to {to_email} ({len(msgs)} changes)")
+        return True
+    except Exception as e:
+        logger.error(f"[notify] email failed for {to_email}: {e}")
+        return False
+
 trading_api = TradingAPI()
 # ── Blueprint v1 ──────────────────────────────────────────────────────────────
 v1 = Blueprint('v1', __name__, url_prefix='/api/v1')
@@ -1406,6 +1572,19 @@ def system_status():
                      status['database'] == 'connected'])
     return jsonify({'success': True, 'overall': 'ready' if all_ready else 'degraded',
                     'components': status}), 200 if all_ready else 503
+
+@v1.route('/jobs/run-notifications', methods=['POST', 'GET'])
+def run_notifications_endpoint():
+    secret = request.headers.get('X-Job-Secret', '')
+    if not os.getenv('JOB_SECRET') or secret != os.getenv('JOB_SECRET'):
+        return jsonify({'success': False, 'error': 'Forbidden'}), 403
+    try:
+        summary = run_notification_job()
+        logger.info(f"[notify] job complete: {summary}")
+        return jsonify({'success': True, 'data': summary})
+    except Exception as e:
+        logger.error(f"[notify] job failed: {e}\n{traceback.format_exc()}")
+        return jsonify({'success': False, 'error': 'Job failed'}), 500
 
 @v1.route('/health', methods=['GET'])
 def health_check():
