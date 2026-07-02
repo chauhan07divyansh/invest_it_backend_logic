@@ -915,7 +915,7 @@ def get_fresh_for_symbol(symbol):
     # analyzer wants the bare ticker — strip exchange suffix
     bare = symbol.replace('.NSE', '').replace('.BSE', '').strip().upper()
     try:
-        result = trading_api.swing_system.analyze_swing_trading_stock(bare)
+        result = trading_api.swing_system.analyze_swing_trading_stock(bare, cache_only_news=True)
         if result:
             # ensure the result carries the watchlist's stored symbol form so
             # downstream comparisons/keys stay consistent
@@ -1591,13 +1591,16 @@ def run_notifications_endpoint():
     secret = request.headers.get('X-Job-Secret', '')
     if not os.getenv('JOB_SECRET') or secret != os.getenv('JOB_SECRET'):
         return jsonify({'success': False, 'error': 'Forbidden'}), 403
-    try:
-        summary = run_notification_job()
-        logger.info(f"[notify] job complete: {summary}")
-        return jsonify({'success': True, 'data': summary})
-    except Exception as e:
-        logger.error(f"[notify] job failed: {e}\n{traceback.format_exc()}")
-        return jsonify({'success': False, 'error': 'Job failed'}), 500
+    def _bg():
+        with app.app_context():
+            try:
+                summary = run_notification_job()
+                logger.info(f"[notify] job complete: {summary}")
+            except Exception as e:
+                logger.error(f"[notify] job failed: {e}\n{traceback.format_exc()}")
+    _executor.submit(_bg)
+    return jsonify({'success': True, 'status': 'started',
+                    'message': 'Notification job started in background'}), 202
 
 @v1.route('/health', methods=['GET'])
 def health_check():
