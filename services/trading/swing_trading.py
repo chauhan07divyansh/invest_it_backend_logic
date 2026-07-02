@@ -871,7 +871,7 @@ class EnhancedSwingTradingSystem:
         name_pat = _re.compile(r'\b' + _re.escape(full) + r'\b')
         return bool(sym_pat.search(head)) or bool(name_pat.search(head))
 
-    def fetch_indian_news(self, symbol: str, num_articles: int = 15) -> Optional[List[str]]:
+    def fetch_indian_news(self, symbol: str, num_articles: int = 15, cache_only: bool = False) -> Optional[List[str]]:
         try:
             if not config.EVENT_REGISTRY_API_KEY:
                 return None
@@ -879,6 +879,8 @@ class EnhancedSwingTradingSystem:
             cached = self._get_from_cache(cache_key)
             if cached:
                 return cached.get("articles")
+            if cache_only:
+                return None
             base_symbol = symbol.split(".")[0]
             stock_info = self.get_stock_info_from_db(base_symbol)
             company_name = stock_info.get("name", base_symbol)
@@ -985,9 +987,9 @@ class EnhancedSwingTradingSystem:
                 confidences.append(0.3)
         return sentiments, confidences
 
-    def analyze_news_sentiment(self, symbol: str, num_articles: int = 15) -> Tuple:
+    def analyze_news_sentiment(self, symbol: str, num_articles: int = 15, cache_only: bool = False) -> Tuple:
         try:
-            articles = self.fetch_indian_news(symbol, num_articles)
+            articles = self.fetch_indian_news(symbol, num_articles, cache_only=cache_only)
             news_source = "Real news" if articles else "Sample"
             if not articles:
                 articles = self.get_sample_news(symbol)
@@ -1143,7 +1145,7 @@ class EnhancedSwingTradingSystem:
             logger.error(f"Error generating trading plan: {e}")
             return default_plan
 
-    def analyze_swing_trading_stock(self, symbol: str, period: str = "6mo") -> Optional[Dict]:
+    def analyze_swing_trading_stock(self, symbol: str, period: str = "6mo", cache_only_news: bool = False) -> Optional[Dict]:
         try:
             cache_key = self._get_cache_key("analysis", symbol, period=period)
             cached_analysis = self._get_from_cache(cache_key)
@@ -1167,7 +1169,7 @@ class EnhancedSwingTradingSystem:
             stoch_k, stoch_d = self.calculate_stochastic(data["High"], data["Low"], data["Close"])
             macd_line, signal_line, histogram = self.calculate_macd(data["Close"])
             support, resistance = self.calculate_support_resistance(data)
-            sentiment_results = self.analyze_news_sentiment(final_symbol)
+            sentiment_results = self.analyze_news_sentiment(final_symbol, cache_only=cache_only_news)
             sentiments = sentiment_results[0] if len(sentiment_results) > 0 else []
             articles = sentiment_results[1] if len(sentiment_results) > 1 else []
             confidences = sentiment_results[2] if len(sentiment_results) > 2 else []
