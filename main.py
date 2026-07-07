@@ -45,8 +45,13 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 # ── Database ──────────────────────────────────────────────────────────────────
+# ── Database ──────────────────────────────────────────────────────────────────
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'sqlite:///sentiquant.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+    'pool_pre_ping': True,
+    'pool_recycle': 280,
+}
 db = SQLAlchemy(app)
 # ── DB Models ─────────────────────────────────────────────────────────────────
 class User(db.Model):
