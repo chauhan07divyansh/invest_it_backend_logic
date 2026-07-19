@@ -1218,100 +1218,141 @@ class EnhancedSwingTradingSystem:
             return [], [], [], "Error", "Error"
 
     def calculate_swing_trading_score(self, data: pd.DataFrame, sentiment_data: Tuple, sector: str) -> float:
-        try:
-            tech_weight, sentiment_weight = self.get_sector_weights(sector)
-            technical_score = 0
-            sentiment_score = 50
-            if data is None or data.empty:
-                return 0
-            current_price = data['Close'].iloc[-1]
-            if pd.isna(current_price) or current_price <= 0:
-                return 0
-            rsi = self.calculate_rsi(data['Close'])
-            if not rsi.empty and not pd.isna(rsi.iloc[-1]):
-                current_rsi = rsi.iloc[-1]
-                if 30 <= current_rsi <= 70:
-                    technical_score += 20
-                elif current_rsi < 30:
-                    technical_score += 15
-                elif current_rsi > 70:
-                    technical_score += 10
-            bb_upper, bb_middle, bb_lower = self.calculate_bollinger_bands(data['Close'])
-            if not bb_upper.empty and not any(pd.isna([bb_upper.iloc[-1], bb_lower.iloc[-1]])):
-                bb_position = (current_price - bb_lower.iloc[-1]) / (bb_upper.iloc[-1] - bb_lower.iloc[-1])
-                if 0.2 <= bb_position <= 0.8:
-                    technical_score += 15
-                elif bb_position < 0.2:
-                    technical_score += 12
-                elif bb_position > 0.8:
-                    technical_score += 8
-            stoch_k, stoch_d = self.calculate_stochastic(data['High'], data['Low'], data['Close'])
-            if not stoch_k.empty and not any(pd.isna([stoch_k.iloc[-1], stoch_d.iloc[-1]])):
-                k_val = stoch_k.iloc[-1]
-                d_val = stoch_d.iloc[-1]
-                if k_val > d_val and k_val < 80:
-                    technical_score += 15
-                elif 20 <= k_val <= 80:
-                    technical_score += 10
-            macd_line, signal_line, histogram = self.calculate_macd(data['Close'])
-            if not macd_line.empty and not any(pd.isna([macd_line.iloc[-1], signal_line.iloc[-1]])):
-                if macd_line.iloc[-1] > signal_line.iloc[-1]:
-                    technical_score += 15
-                if len(histogram) > 1 and not any(pd.isna([histogram.iloc[-1], histogram.iloc[-2]])):
-                    if histogram.iloc[-1] > histogram.iloc[-2]:
-                        technical_score += 5
-            if 'Volume' in data.columns:
-                avg_volume = self.safe_rolling_calculation(data['Volume'], 20, 'mean').iloc[-1]
-                current_volume = data['Volume'].iloc[-1]
-                if not pd.isna(avg_volume) and not pd.isna(current_volume) and avg_volume > 0:
-                    if current_volume > avg_volume * 1.2:
-                        technical_score += 10
-                    elif current_volume > avg_volume:
-                        technical_score += 5
-            support, resistance = self.calculate_support_resistance(data)
-            if support and resistance and not any(pd.isna([support, resistance])):
-                distance_to_support = (current_price - support) / support
-                if distance_to_support < 0.05:
-                    technical_score += 8
-                elif 0.05 <= distance_to_support <= 0.15:
-                    technical_score += 10
-            if len(data) >= 50:
-                ma_20 = self.safe_rolling_calculation(data['Close'], 20, 'mean').iloc[-1]
-                ma_50 = self.safe_rolling_calculation(data['Close'], 50, 'mean').iloc[-1]
-                if not any(pd.isna([ma_20, ma_50])):
-                    if current_price > ma_20 > ma_50:
-                        technical_score += 15
-                    elif current_price > ma_20:
-                        technical_score += 10
-                    elif ma_20 > ma_50:
-                        technical_score += 5
-            technical_score = min(100, max(0, technical_score))
-            MIN_ARTICLES_FOR_SENTIMENT = 3
-            news_source = sentiment_data[4] if (sentiment_data and len(sentiment_data) > 4) else "Unknown"
-            sentiments = sentiment_data[0] if (sentiment_data and len(sentiment_data) > 0) else []
-            confidences = sentiment_data[2] if (sentiment_data and len(sentiment_data) > 2) else []
-            if (news_source == "Real news"
-                    and len(sentiments) >= MIN_ARTICLES_FOR_SENTIMENT
-                    and confidences):
-                if sentiments and confidences:
-                    sentiment_value = 0
-                    total_weight = 0
-                    for sentiment, confidence in zip(sentiments, confidences):
-                        weight = confidence if not pd.isna(confidence) else 0.5
-                        if sentiment == 'positive':
-                            sentiment_value += weight
-                        elif sentiment == 'negative':
-                            sentiment_value -= weight
-                        total_weight += weight
-                    if total_weight > 0:
-                        normalized_sentiment = sentiment_value / total_weight
-                        sentiment_score = 50 + (normalized_sentiment * 50)
-            sentiment_score = min(100, max(0, sentiment_score))
-            final_score = (technical_score * tech_weight) + (sentiment_score * sentiment_weight)
-            return min(100, max(0, final_score))
-        except Exception as e:
-            logger.error(f"Error calculating swing score: {e}")
-            return 0
+      self._last_factors = []
+      try:
+          tech_weight, sentiment_weight = self.get_sector_weights(sector)
+          technical_score = 0
+          sentiment_score = 50
+          if data is None or data.empty:
+              return 0
+          current_price = data['Close'].iloc[-1]
+          if pd.isna(current_price) or current_price <= 0:
+              return 0
+          rsi = self.calculate_rsi(data['Close'])
+          if not rsi.empty and not pd.isna(rsi.iloc[-1]):
+              current_rsi = rsi.iloc[-1]
+              if 30 <= current_rsi <= 70:
+                  technical_score += 20
+                  self._last_factors.append(('pos', 'Momentum is healthy and balanced (not overbought or oversold)'))
+              elif current_rsi < 30:
+                  technical_score += 15
+                  self._last_factors.append(('pos', 'Oversold — could be due for a bounce'))
+              elif current_rsi > 70:
+                  technical_score += 10
+                  self._last_factors.append(('caution', 'Overbought — may be stretched near-term'))
+          bb_upper, bb_middle, bb_lower = self.calculate_bollinger_bands(data['Close'])
+          if not bb_upper.empty and not any(pd.isna([bb_upper.iloc[-1], bb_lower.iloc[-1]])):
+              bb_position = (current_price - bb_lower.iloc[-1]) / (bb_upper.iloc[-1] - bb_lower.iloc[-1])
+              if 0.2 <= bb_position <= 0.8:
+                  technical_score += 15
+                  self._last_factors.append(('pos', 'Trading in a stable range with room to move'))
+              elif bb_position < 0.2:
+                  technical_score += 12
+                  self._last_factors.append(('pos', 'Near the low of its recent range — potential value zone'))
+              elif bb_position > 0.8:
+                  technical_score += 8
+                  self._last_factors.append(('caution', 'Near the top of its recent range — extended'))
+          stoch_k, stoch_d = self.calculate_stochastic(data['High'], data['Low'], data['Close'])
+          if not stoch_k.empty and not any(pd.isna([stoch_k.iloc[-1], stoch_d.iloc[-1]])):
+              k_val = stoch_k.iloc[-1]
+              d_val = stoch_d.iloc[-1]
+              if k_val > d_val and k_val < 80:
+                  technical_score += 15
+                  self._last_factors.append(('pos', 'Short-term trend turning up (stochastic crossover)'))
+              elif 20 <= k_val <= 80:
+                  technical_score += 10
+          macd_line, signal_line, histogram = self.calculate_macd(data['Close'])
+          if not macd_line.empty and not any(pd.isna([macd_line.iloc[-1], signal_line.iloc[-1]])):
+              if macd_line.iloc[-1] > signal_line.iloc[-1]:
+                  technical_score += 15
+                  self._last_factors.append(('pos', 'MACD is bullish — upward trend confirmed'))
+              else:
+                  self._last_factors.append(('neg', 'MACD is bearish — trend leans down'))
+              if len(histogram) > 1 and not any(pd.isna([histogram.iloc[-1], histogram.iloc[-2]])):
+                  if histogram.iloc[-1] > histogram.iloc[-2]:
+                      technical_score += 5
+          if 'Volume' in data.columns:
+              avg_volume = self.safe_rolling_calculation(data['Volume'], 20, 'mean').iloc[-1]
+              current_volume = data['Volume'].iloc[-1]
+              if not pd.isna(avg_volume) and not pd.isna(current_volume) and avg_volume > 0:
+                  if current_volume > avg_volume * 1.2:
+                      technical_score += 10
+                      self._last_factors.append(('pos', 'Above-average volume — strong trading interest'))
+                  elif current_volume > avg_volume:
+                      technical_score += 5
+          support, resistance = self.calculate_support_resistance(data)
+          if support and resistance and not any(pd.isna([support, resistance])):
+              distance_to_support = (current_price - support) / support
+              if distance_to_support < 0.05:
+                  technical_score += 8
+                  self._last_factors.append(('pos', 'Sitting just above support — favorable risk/reward'))
+              elif 0.05 <= distance_to_support <= 0.15:
+                  technical_score += 10
+          if len(data) >= 50:
+              ma_20 = self.safe_rolling_calculation(data['Close'], 20, 'mean').iloc[-1]
+              ma_50 = self.safe_rolling_calculation(data['Close'], 50, 'mean').iloc[-1]
+              if not any(pd.isna([ma_20, ma_50])):
+                  if current_price > ma_20 > ma_50:
+                      technical_score += 15
+                      self._last_factors.append(('pos', 'Uptrend intact — price above both key moving averages'))
+                  elif current_price > ma_20:
+                      technical_score += 10
+                      self._last_factors.append(('pos', 'Price above its short-term average (near-term strength)'))
+                  elif ma_20 > ma_50:
+                      technical_score += 5
+                  else:
+                      self._last_factors.append(('neg', 'Downtrend — price below its key moving averages'))
+          technical_score = min(100, max(0, technical_score))
+          MIN_ARTICLES_FOR_SENTIMENT = 3
+          news_source = sentiment_data[4] if (sentiment_data and len(sentiment_data) > 4) else "Unknown"
+          sentiments = sentiment_data[0] if (sentiment_data and len(sentiment_data) > 0) else []
+          confidences = sentiment_data[2] if (sentiment_data and len(sentiment_data) > 2) else []
+          if (news_source == "Real news"
+                  and len(sentiments) >= MIN_ARTICLES_FOR_SENTIMENT
+                  and confidences):
+              if sentiments and confidences:
+                  sentiment_value = 0
+                  total_weight = 0
+                  for sentiment, confidence in zip(sentiments, confidences):
+                      weight = confidence if not pd.isna(confidence) else 0.5
+                      if sentiment == 'positive':
+                          sentiment_value += weight
+                      elif sentiment == 'negative':
+                          sentiment_value -= weight
+                      total_weight += weight
+                  if total_weight > 0:
+                      normalized_sentiment = sentiment_value / total_weight
+                      sentiment_score = 50 + (normalized_sentiment * 50)
+                      npos = sum(1 for s in sentiments if s == 'positive')
+                      nneg = sum(1 for s in sentiments if s == 'negative')
+                      if sentiment_score >= 60:
+                          self._last_factors.append(('pos', f'Recent news skews positive ({npos} of {len(sentiments)} articles)'))
+                      elif sentiment_score <= 40:
+                          self._last_factors.append(('neg', f'Recent news skews negative ({nneg} of {len(sentiments)} articles)'))
+                      else:
+                          self._last_factors.append(('neutral', 'Recent news is mixed'))
+          else:
+              self._last_factors.append(('neutral', 'Limited recent news — score is based on price action'))
+          sentiment_score = min(100, max(0, sentiment_score))
+          final_score = (technical_score * tech_weight) + (sentiment_score * sentiment_weight)
+          return min(100, max(0, final_score))
+      except Exception as e:
+          logger.error(f"Error calculating swing score: {e}")
+          return 0
+
+    def _format_reasoning(self, factors, score):
+        pos     = [msg for kind, msg in factors if kind == 'pos']
+        neg     = [msg for kind, msg in factors if kind == 'neg']
+        caution = [msg for kind, msg in factors if kind == 'caution']
+        neutral = [msg for kind, msg in factors if kind == 'neutral']
+        if score >= 60:
+            verdict = "Leaning bullish"
+        elif score >= 45:
+            verdict = "A mixed picture"
+        else:
+            verdict = "Leaning bearish"
+        return {"verdict": verdict, "in_favor": pos, "against": neg,
+                "watch_outs": caution, "context": neutral}
 
     def generate_trading_plan(self, data: pd.DataFrame, score: float, risk_metrics: Dict) -> Dict:
         default_plan = {
@@ -1359,90 +1400,145 @@ class EnhancedSwingTradingSystem:
             return default_plan
 
     def analyze_swing_trading_stock(self, symbol: str, period: str = "6mo", cache_only_news: bool = False) -> Optional[Dict]:
-        try:
-            cache_key = self._get_cache_key("analysis", symbol, period=period)
-            cached_analysis = self._get_from_cache(cache_key)
-            if cached_analysis:
-                return cached_analysis
-            data, info, final_symbol = self.get_indian_stock_data(symbol, period)
-            if data is None or data.empty:
-                return None
-            stock_info = self.get_stock_info_from_db(symbol)
-            sector = stock_info.get("sector", "Unknown")
-            company_name = stock_info.get("name", symbol)
-            current_price = data["Close"].iloc[-1]
-            if len(data) >= 2:
-                price_change = data["Close"].iloc[-1] - data["Close"].iloc[-2]
-                price_change_pct = (price_change / data["Close"].iloc[-2]) * 100
-            else:
-                price_change = 0.0
-                price_change_pct = 0.0
-            rsi = self.calculate_rsi(data["Close"])
-            bb_upper, bb_middle, bb_lower = self.calculate_bollinger_bands(data["Close"])
-            stoch_k, stoch_d = self.calculate_stochastic(data["High"], data["Low"], data["Close"])
-            macd_line, signal_line, histogram = self.calculate_macd(data["Close"])
-            support, resistance = self.calculate_support_resistance(data)
-            sentiment_results = self.analyze_news_sentiment(final_symbol, cache_only=cache_only_news)
-            sentiments = sentiment_results[0] if len(sentiment_results) > 0 else []
-            articles = sentiment_results[1] if len(sentiment_results) > 1 else []
-            confidences = sentiment_results[2] if len(sentiment_results) > 2 else []
-            sentiment_method = sentiment_results[3] if len(sentiment_results) > 3 else "Unknown"
-            sentiment_source = sentiment_results[4] if len(sentiment_results) > 4 else "Unknown"
-            if sentiment_source == "Real news" and articles:
-                _shadow_executor.submit(
-                    self._shadow_finbert, final_symbol, list(articles), list(sentiments), list(confidences)
-                )
-            risk_metrics = self.calculate_risk_metrics(data)
-            swing_score = self.calculate_swing_trading_score(data=data, sentiment_data=sentiment_results, sector=sector)
-            trading_plan = self.generate_trading_plan(data, swing_score, risk_metrics)
-            result = {
-                "symbol": final_symbol, "company_name": company_name, "sector": sector,
-                "current_price": float(current_price), "price_change": float(price_change),
-                "price_change_pct": float(price_change_pct),
-                "rsi": float(rsi.iloc[-1]) if not rsi.empty and not pd.isna(rsi.iloc[-1]) else None,
-                "bollinger_bands": {
-                    "upper": float(bb_upper.iloc[-1]) if not bb_upper.empty else None,
-                    "middle": float(bb_middle.iloc[-1]) if not bb_middle.empty else None,
-                    "lower": float(bb_lower.iloc[-1]) if not bb_lower.empty else None
-                },
-                "stochastic": {
-                    "k": float(stoch_k.iloc[-1]) if not stoch_k.empty else None,
-                    "d": float(stoch_d.iloc[-1]) if not stoch_d.empty else None
-                },
-                "macd": {
-                    "line": float(macd_line.iloc[-1]) if not macd_line.empty else None,
-                    "signal": float(signal_line.iloc[-1]) if not signal_line.empty else None,
-                    "histogram": float(histogram.iloc[-1]) if not histogram.empty else None
-                },
-                "support_resistance": {
-                    "support": float(support) if support else None,
-                    "resistance": float(resistance) if resistance else None
-                },
-                "sentiment": {
-                    "scores": sentiments, "method": sentiment_method, "source": sentiment_source,
-                    "summary": {
-                        "positive": sentiments.count("positive") if sentiments else 0,
-                        "negative": sentiments.count("negative") if sentiments else 0,
-                        "neutral": sentiments.count("neutral") if sentiments else 0
-                    }
-                },
-                "risk_metrics": risk_metrics, "swing_score": float(swing_score),
-                "trading_plan": trading_plan, "model_type": sentiment_method,
-                "analysis_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            }
-            self._set_to_cache(cache_key, result, self.cache_ttl["analysis"])
-            return result
-        except Exception as e:
-            logger.error(f"Error analyzing {symbol}: {e}")
-            return None
+      try:
+          cache_key = self._get_cache_key("analysis", symbol, period=period)
+          cached_analysis = self._get_from_cache(cache_key)
+          if cached_analysis:
+              return cached_analysis
 
-    # Sectors to AVOID in a bear market (cyclical / risk-off underperformers).
+          data, info, final_symbol = self.get_indian_stock_data(symbol, period)
+          if data is None or data.empty:
+              return None
+
+          stock_info = self.get_stock_info_from_db(symbol)
+          sector = stock_info.get("sector", "Unknown")
+          company_name = stock_info.get("name", symbol)
+
+          current_price = data["Close"].iloc[-1]
+
+          if len(data) >= 2:
+              price_change = data["Close"].iloc[-1] - data["Close"].iloc[-2]
+              price_change_pct = (price_change / data["Close"].iloc[-2]) * 100
+          else:
+              price_change = 0.0
+              price_change_pct = 0.0
+
+          rsi = self.calculate_rsi(data["Close"])
+          bb_upper, bb_middle, bb_lower = self.calculate_bollinger_bands(data["Close"])
+          stoch_k, stoch_d = self.calculate_stochastic(
+              data["High"], data["Low"], data["Close"]
+          )
+          macd_line, signal_line, histogram = self.calculate_macd(data["Close"])
+          support, resistance = self.calculate_support_resistance(data)
+
+          sentiment_results = self.analyze_news_sentiment(
+              final_symbol,
+              cache_only=cache_only_news
+          )
+
+          sentiments = sentiment_results[0] if len(sentiment_results) > 0 else []
+          articles = sentiment_results[1] if len(sentiment_results) > 1 else []
+          confidences = sentiment_results[2] if len(sentiment_results) > 2 else []
+          sentiment_method = sentiment_results[3] if len(sentiment_results) > 3 else "Unknown"
+          sentiment_source = sentiment_results[4] if len(sentiment_results) > 4 else "Unknown"
+
+          if sentiment_source == "Real news" and articles:
+              _shadow_executor.submit(
+                  self._shadow_finbert,
+                  final_symbol,
+                  list(articles),
+                  list(sentiments),
+                  list(confidences)
+              )
+
+          risk_metrics = self.calculate_risk_metrics(data)
+
+          swing_score = self.calculate_swing_trading_score(
+              data=data,
+              sentiment_data=sentiment_results,
+              sector=sector
+          )
+
+          # Capture reasoning immediately after scoring
+          score_factors = list(getattr(self, "_last_factors", []))
+
+          trading_plan = self.generate_trading_plan(
+              data,
+              swing_score,
+              risk_metrics
+          )
+
+          result = {
+              "symbol": final_symbol,
+              "company_name": company_name,
+              "sector": sector,
+              "current_price": float(current_price),
+              "price_change": float(price_change),
+              "price_change_pct": float(price_change_pct),
+
+              "rsi": float(rsi.iloc[-1])
+              if not rsi.empty and not pd.isna(rsi.iloc[-1])
+              else None,
+
+              "bollinger_bands": {
+                  "upper": float(bb_upper.iloc[-1]) if not bb_upper.empty else None,
+                  "middle": float(bb_middle.iloc[-1]) if not bb_middle.empty else None,
+                  "lower": float(bb_lower.iloc[-1]) if not bb_lower.empty else None,
+              },
+
+              "stochastic": {
+                  "k": float(stoch_k.iloc[-1]) if not stoch_k.empty else None,
+                  "d": float(stoch_d.iloc[-1]) if not stoch_d.empty else None,
+              },
+
+              "macd": {
+                  "line": float(macd_line.iloc[-1]) if not macd_line.empty else None,
+                  "signal": float(signal_line.iloc[-1]) if not signal_line.empty else None,
+                  "histogram": float(histogram.iloc[-1]) if not histogram.empty else None,
+              },
+
+              "support_resistance": {
+                  "support": float(support) if support else None,
+                  "resistance": float(resistance) if resistance else None,
+              },
+
+              "sentiment": {
+                  "scores": sentiments,
+                  "method": sentiment_method,
+                  "source": sentiment_source,
+                  "summary": {
+                      "positive": sentiments.count("positive") if sentiments else 0,
+                      "negative": sentiments.count("negative") if sentiments else 0,
+                      "neutral": sentiments.count("neutral") if sentiments else 0,
+                  },
+              },
+
+              "risk_metrics": risk_metrics,
+              "swing_score": float(swing_score),
+              "why": self._format_reasoning(score_factors, float(swing_score)),
+              "trading_plan": trading_plan,
+              "model_type": sentiment_method,
+              "analysis_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+          }
+
+          self._set_to_cache(cache_key, result, self.cache_ttl["analysis"])
+
+          return result
+
+      except Exception as e:
+          logger.error(f"Error analyzing {symbol}: {e}")
+          return None
     REGIME_EXCLUDE = {
-        'BEAR':     ['Oil & Gas', 'Metals', 'Mining', 'Steel', 'Cement'],
-        'SIDEWAYS': [],
-        'BULL':     [],
+      'BEAR':     ['Oil & Gas', 'Metals', 'Mining', 'Steel', 'Cement'],
+      'SIDEWAYS': [],
+      'BULL':     [],
     }
-    MAX_PER_SECTOR = {'BEAR': 1, 'SIDEWAYS': 2, 'BULL': 2}
+
+    MAX_PER_SECTOR = {
+      'BEAR': 1,
+      'SIDEWAYS': 2,
+      'BULL': 2,
+    }
 
     def filter_stocks_by_risk_appetite(self, results: List[Dict], risk_appetite: str) -> List[Dict]:
         """Filter stocks by risk appetite (+ regime/sector when ENABLE_NEW_LOGIC).
