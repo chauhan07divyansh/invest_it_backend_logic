@@ -763,6 +763,7 @@ class TradingAPI:
             'fundamentals':         cleaned_fundamentals,
             'sentiment':            sentiment_data,
             'time_horizon':         "1-4 weeks" if system_type == "Swing" else "6-18 months",
+            'why':                  result.get('why'),
         }
 
     def _standardize_portfolio_keys(self, portfolio_list):
