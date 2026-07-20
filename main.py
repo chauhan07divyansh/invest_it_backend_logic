@@ -1382,7 +1382,7 @@ def get_all_stocks():
         return jsonify({'success': True, 'data': cached})
     if not trading_api.swing_system:
         return jsonify({'success': False, 'error': 'Trading system not available'}), 503
-    stocks = trading_api.swing_system.get_all_stock_symbols()
+    stocks = trading_api.swing_system.get_all_analyzable_symbols()
     result = {'stocks': stocks, 'total_count': len(stocks)}
     set_cache(cache_key, result)
     return jsonify({'success': True, 'data': result})
