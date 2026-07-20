@@ -741,7 +741,17 @@ class EnhancedSwingTradingSystem:
         except Exception as e:
             logger.error(f"Error getting stock symbols: {e}")
             return []
-
+    def get_all_analyzable_symbols(self) -> List[str]:
+        """Every symbol a user can analyze (portfolio 240 + small-caps).
+        Used by the /stocks browse list so small-caps are discoverable.
+        Portfolio generation still uses get_all_stock_symbols() (indian_stocks only)."""
+        try:
+            ref = getattr(self, 'all_stocks_reference', None) or self.indian_stocks
+            return list(ref.keys())
+        except Exception as e:
+            logger.error(f"Error getting analyzable symbols: {e}")
+            return list(self.indian_stocks.keys())
+          
     @lru_cache(maxsize=1000)
     def get_stock_info_from_db(self, symbol: str) -> Dict:
         try:
