@@ -18,6 +18,7 @@ import logging
 from datetime import datetime, timedelta
 import traceback
 import jwt
+
 # NEW-5: passlib with argon2 (bcrypt kept as upgrade fallback)
 try:
     from passlib.context import CryptContext
@@ -31,7 +32,9 @@ try:
 except ImportError:
     import bcrypt
     PASSLIB_AVAILABLE = False
+
 from services.data_providers.stock_data_provider import StockDataProvider
+
 # ── Trading system import ─────────────────────────────────────────────────────
 SYSTEMS_AVAILABLE = False
 try:
@@ -40,11 +43,12 @@ try:
     SYSTEMS_AVAILABLE = True
 except ImportError as e:
     logging.critical(f"Could not import trading systems: {e}. API running in degraded mode.")
+
 # ── App setup ─────────────────────────────────────────────────────────────────
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
-# ── Database ──────────────────────────────────────────────────────────────────
+
 # ── Database ──────────────────────────────────────────────────────────────────
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'sqlite:///sentiquant.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
@@ -53,6 +57,7 @@ app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
     'pool_recycle': 280,
 }
 db = SQLAlchemy(app)
+
 # ── DB Models ─────────────────────────────────────────────────────────────────
 class User(db.Model):
     __tablename__ = 'users'
@@ -131,8 +136,50 @@ class NotificationLog(db.Model):
     channel    = db.Column(db.String(16))
     sent_at    = db.Column(db.DateTime, default=datetime.utcnow)
 
+class TrackedPosition(db.Model):
+    __tablename__ = 'tracked_positions'
+    id                 = db.Column(db.String(64), primary_key=True)   # UUID from frontend
+    symbol             = db.Column(db.String(32), nullable=False, index=True)
+    name               = db.Column(db.String(255), nullable=False)
+    entry_price        = db.Column(db.Float, nullable=False)
+    entry_date         = db.Column(db.String(20), nullable=False)
+    stop_loss          = db.Column(db.Float, nullable=False)
+    t1                 = db.Column(db.Float, nullable=False)
+    t2                 = db.Column(db.Float, nullable=False)
+    t3                 = db.Column(db.Float, nullable=False)
+    status             = db.Column(db.String(20), nullable=False, default='active')
+    exit_price         = db.Column(db.Float, nullable=True)
+    exit_date          = db.Column(db.String(20), nullable=True)
+    notes              = db.Column(db.Text, default='')
+    source             = db.Column(db.String(30), nullable=False, default='manual')
+    percent_closed     = db.Column(db.Integer, default=0)
+    partial_exit_price = db.Column(db.Float, nullable=True)
+    partial_exit_date  = db.Column(db.String(20), nullable=True)
+    sort_order         = db.Column(db.Integer, default=0)             # preserve insertion order
+    created_at         = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'symbol': self.symbol,
+            'name': self.name,
+            'entryPrice': self.entry_price,
+            'entryDate': self.entry_date,
+            'stopLoss': self.stop_loss,
+            't1': self.t1, 't2': self.t2, 't3': self.t3,
+            'status': self.status,
+            'exitPrice': self.exit_price,
+            'exitDate': self.exit_date,
+            'notes': self.notes or '',
+            'source': self.source,
+            'percentClosed': self.percent_closed if self.percent_closed is not None else 0,
+            'partialExitPrice': self.partial_exit_price,
+            'partialExitDate': self.partial_exit_date,
+        }
+
 with app.app_context():
     db.create_all()
+
 # ── Rate limiter ──────────────────────────────────────────────────────────────
 limiter = Limiter(
     get_remote_address,
@@ -140,6 +187,7 @@ limiter = Limiter(
     default_limits=["300 per day", "60 per hour"],
     storage_uri=os.getenv("LIMITER_STORAGE", "memory://")
 )
+
 # ── CORS ──────────────────────────────────────────────────────────────────────
 ALLOWED_ORIGINS = [
     "http://localhost:3000",
@@ -149,6 +197,7 @@ ALLOWED_ORIGINS = [
     "https://sentiquant-frontend.onrender.com"
 ]
 CORS(app, resources={r"/api/*": {"origins": ALLOWED_ORIGINS}}, supports_credentials=True)
+
 # ── SEBI Disclaimer ───────────────────────────────────────────────────────────
 SEBI_DISCLAIMER = {
     "text": (
@@ -165,15 +214,18 @@ SEBI_DISCLAIMER = {
     "version": "2.0",
     "last_updated": "2026-04-30"
 }
+
 # ── Plan limits ───────────────────────────────────────────────────────────────
 PLAN_LIMITS = {
     'FREE':       {'analyze': True,  'portfolio': True,  'compare': False, 'daily_calls': 10,  'portfolio_per_day': 1},
     'PRO':        {'analyze': True,  'portfolio': True,  'compare': True,  'daily_calls': 500, 'portfolio_per_day': 999},
     'ENTERPRISE': {'analyze': True,  'portfolio': True,  'compare': True,  'daily_calls': 999999, 'portfolio_per_day': 999},
 }
+
 # ── Account lockout config ────────────────────────────────────────────────────
 MAX_FAILED_ATTEMPTS      = 5
 LOCKOUT_DURATION_MINUTES = 15
+
 # ── Redis cache ───────────────────────────────────────────────────────────────
 CACHE_TIMEOUT  = 300
 PRECOMPUTE_TTL = 86400
@@ -210,6 +262,7 @@ def set_cache(key: str, value, ttl: int = CACHE_TIMEOUT):
         except Exception as e:
             logger.warning(f"Redis SET '{key}': {e}")
     simple_cache[key] = (value, datetime.now().timestamp())
+
 # ── Token blacklist helpers ───────────────────────────────────────────────────
 BLACKLIST_PREFIX = "blacklist:token:"
 BLACKLIST_TTL    = 15 * 60
@@ -251,6 +304,7 @@ def _fetch_with_retry(func, *args, **kwargs):
     def _inner():
         return func(*args, **kwargs)
     return _inner()
+
 # ── Password helpers ──────────────────────────────────────────────────────────
 def hash_password(plain: str) -> str:
     if PASSLIB_AVAILABLE:
@@ -266,6 +320,7 @@ def password_needs_rehash(hashed: str) -> bool:
     if PASSLIB_AVAILABLE:
         return pwd_context.needs_update(hashed)
     return False
+
 # ── Account lockout helpers ───────────────────────────────────────────────────
 def is_account_locked(user) -> bool:
     if not user.locked_until:
@@ -284,6 +339,7 @@ def reset_failed_attempts(user):
     user.failed_login_attempts = 0
     user.locked_until = None
     db.session.commit()
+
 # ── Audit log helper ──────────────────────────────────────────────────────────
 def log_audit(email, status, failure_reason=None, user_id=None):
     try:
@@ -301,6 +357,7 @@ def log_audit(email, status, failure_reason=None, user_id=None):
         db.session.commit()
     except Exception as e:
         logger.warning(f"Audit log failed: {e}")
+
 # ── Email helpers ─────────────────────────────────────────────────────────────
 def _send_verification_email(to_email: str, token: str):
     base_url  = os.getenv("APP_BASE_URL", "http://localhost:5000")
@@ -364,6 +421,7 @@ def _send_login_alert(admin_email: str, user_email: str, ip: str, user_agent: st
         logger.info(f"Login alert sent for {user_email}")
     except Exception as e:
         logger.error(f"Failed to send login alert for {user_email}: {e}")
+
 # ── Request lifecycle hooks ───────────────────────────────────────────────────
 @app.before_request
 def attach_request_id():
@@ -418,6 +476,7 @@ def _estimate_cost(path: str) -> float:
     if '/portfolio/' in path:
         return 2.0
     return 0.1
+
 # ── JWT helpers ───────────────────────────────────────────────────────────────
 def decode_token(token):
     secret = os.getenv("JWT_SECRET")
@@ -543,6 +602,7 @@ def check_daily_api_limit(f):
                 logger.warning(f"{log_context()} Daily limit check failed: {e}")
         return f(*args, **kwargs)
     return decorated
+
 # ── Validation helpers ────────────────────────────────────────────────────────
 NSE_SYMBOLS = set()
 try:
@@ -582,6 +642,7 @@ def validate_time_period(tp):
         return tp
     except (TypeError, ValueError):
         raise ValueError("Time period must be a valid integer")
+
 # ── TradingAPI class ──────────────────────────────────────────────────────────
 class TradingAPI:
     def __init__(self):
@@ -691,11 +752,11 @@ class TradingAPI:
     def _fallback_trading_plan(self, result):
         cp = result.get('current_price', 0)
         return {
-            'signal':      'UNAVAILABLE',
-            'strategy':    'Trading plan not available from backend system.',
-            'entry_price': f"Around {cp:.2f}" if cp > 0 else 'N/A',
-            'stop_loss':   'N/A',
-            'target_price':'N/A',
+            'signal':       'UNAVAILABLE',
+            'strategy':     'Trading plan not available from backend system.',
+            'entry_price':  f"Around {cp:.2f}" if cp > 0 else 'N/A',
+            'stop_loss':    'N/A',
+            'target_price': 'N/A',
         }
 
     def format_analysis_response(self, result, system_type):
@@ -1049,8 +1110,112 @@ def _send_watchlist_email(to_email, msgs):
         return False
 
 trading_api = TradingAPI()
+
 # ── Blueprint v1 ──────────────────────────────────────────────────────────────
 v1 = Blueprint('v1', __name__, url_prefix='/api/v1')
+
+# ── Portfolio Tracker Admin Helper & Storage Endpoints ────────────────────────
+def _check_portfolio_admin():
+    secret = request.headers.get('X-Portfolio-Admin', '')
+    return bool(os.getenv('PORTFOLIO_ADMIN_SECRET')) and secret == os.getenv('PORTFOLIO_ADMIN_SECRET')
+
+@v1.route('/portfolio-tracker', methods=['GET'])
+def portfolio_tracker_list():
+    """Public: return all tracked positions (raw stored form; frontend attaches live prices)."""
+    try:
+        rows = TrackedPosition.query.order_by(TrackedPosition.sort_order.asc(),
+                                              TrackedPosition.created_at.asc()).all()
+        return jsonify({'success': True, 'positions': [r.to_dict() for r in rows]})
+    except Exception as e:
+        logger.error(f"{log_context()} portfolio-tracker GET: {e}")
+        return jsonify({'success': False, 'error': 'Failed to load positions'}), 500
+
+@v1.route('/portfolio-tracker', methods=['POST'])
+def portfolio_tracker_create():
+    if not _check_portfolio_admin():
+        return jsonify({'success': False, 'error': 'Unauthorized'}), 401
+    try:
+        b = request.get_json() or {}
+        maxo = db.session.query(db.func.max(TrackedPosition.sort_order)).scalar() or 0
+        pos = TrackedPosition(
+            id=b['id'], symbol=str(b['symbol']).upper().strip(), name=str(b['name']).strip(),
+            entry_price=float(b['entryPrice']), entry_date=str(b['entryDate']),
+            stop_loss=float(b['stopLoss']), t1=float(b['t1']), t2=float(b['t2']), t3=float(b['t3']),
+            status=str(b['status']),
+            exit_price=(float(b['exitPrice']) if b.get('exitPrice') not in (None, '') else None),
+            exit_date=(str(b['exitDate']) if b.get('exitDate') else None),
+            notes=str(b.get('notes', '')),
+            source=('portfolio_generator' if b.get('source') == 'portfolio_generator' else 'manual'),
+            percent_closed=int(b.get('percentClosed') or 0),
+            partial_exit_price=(float(b['partialExitPrice']) if b.get('partialExitPrice') not in (None, '') else None),
+            partial_exit_date=(str(b['partialExitDate']) if b.get('partialExitDate') else None),
+            sort_order=maxo + 1,
+        )
+        db.session.add(pos)
+        db.session.commit()
+        return jsonify({'success': True, 'position': pos.to_dict()})
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"{log_context()} portfolio-tracker POST: {e}")
+        return jsonify({'success': False, 'error': 'Failed to create position'}), 500
+
+@v1.route('/portfolio-tracker', methods=['PUT'])
+def portfolio_tracker_update():
+    if not _check_portfolio_admin():
+        return jsonify({'success': False, 'error': 'Unauthorized'}), 401
+    try:
+        b = request.get_json() or {}
+        if not b.get('id'):
+            return jsonify({'success': False, 'error': 'Missing id'}), 400
+        pos = TrackedPosition.query.get(b['id'])
+        if not pos:
+            return jsonify({'success': False, 'error': 'Position not found'}), 404
+        # merge only provided fields (mirror the frontend PUT semantics)
+        if 'symbol' in b and b['symbol']:      pos.symbol = str(b['symbol']).upper().strip()
+        if 'name' in b:                         pos.name = str(b['name']).strip()
+        if 'entryPrice' in b:                   pos.entry_price = float(b['entryPrice'])
+        if 'entryDate' in b and b['entryDate']: pos.entry_date = str(b['entryDate'])
+        if 'stopLoss' in b:                     pos.stop_loss = float(b['stopLoss'])
+        if 't1' in b:                           pos.t1 = float(b['t1'])
+        if 't2' in b:                           pos.t2 = float(b['t2'])
+        if 't3' in b:                           pos.t3 = float(b['t3'])
+        if 'status' in b and b['status']:       pos.status = str(b['status'])
+        if 'exitPrice' in b:
+            pos.exit_price = (float(b['exitPrice']) if b['exitPrice'] not in (None, '') else None)
+        if 'exitDate' in b:
+            pos.exit_date = (str(b['exitDate']) if b['exitDate'] else None)
+        if 'notes' in b:                        pos.notes = str(b['notes'])
+        if 'percentClosed' in b:                pos.percent_closed = int(b['percentClosed'] or 0)
+        if 'partialExitPrice' in b:
+            pos.partial_exit_price = (float(b['partialExitPrice']) if b['partialExitPrice'] not in (None, '') else None)
+        if 'partialExitDate' in b:
+            pos.partial_exit_date = (str(b['partialExitDate']) if b['partialExitDate'] else None)
+        db.session.commit()
+        return jsonify({'success': True, 'position': pos.to_dict()})
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"{log_context()} portfolio-tracker PUT: {e}")
+        return jsonify({'success': False, 'error': 'Failed to update position'}), 500
+
+@v1.route('/portfolio-tracker', methods=['DELETE'])
+def portfolio_tracker_delete():
+    if not _check_portfolio_admin():
+        return jsonify({'success': False, 'error': 'Unauthorized'}), 401
+    try:
+        pid = request.args.get('id')
+        if not pid:
+            return jsonify({'success': False, 'error': 'Missing id'}), 400
+        pos = TrackedPosition.query.get(pid)
+        if not pos:
+            return jsonify({'success': False, 'error': 'Position not found'}), 404
+        db.session.delete(pos)
+        db.session.commit()
+        return jsonify({'success': True})
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"{log_context()} portfolio-tracker DELETE: {e}")
+        return jsonify({'success': False, 'error': 'Failed to delete position'}), 500
+
 # ── Auth endpoints ────────────────────────────────────────────────────────────
 @v1.route('/auth/register', methods=['POST'])
 @limiter.limit("10 per hour")
@@ -1285,6 +1450,7 @@ def get_usage():
     except Exception as e:
         logger.error(f"{log_context()} usage endpoint error: {e}")
         return jsonify({'success': False, 'error': 'Could not fetch usage'}), 500
+
 # ── Portfolio job store ───────────────────────────────────────────────────────
 JOB_TTL = 3600
 
@@ -1328,6 +1494,7 @@ def _run_swing_job(job_id: str, budget: float, risk: str, user_id: int, plan: st
 def _run_position_job(job_id: str, budget: float, risk: str, time_period: int, user_id: int, plan: str):
     """DISABLED — position portfolio burns too many news API tokens."""
     _set_job(job_id, {'status': 'failed', 'progress': 0, 'result': None, 'error': 'Position trading portfolio is coming soon.'})
+
 # ── Trading endpoints ─────────────────────────────────────────────────────────
 @v1.route('/portfolio/swing/start', methods=['POST'])
 @token_required
@@ -1568,19 +1735,20 @@ def compare_strategies_endpoint(symbol):
     except Exception as e:
         logger.error(f"{log_context()} compare/{symbol}: {e}\n{traceback.format_exc()}")
         return jsonify({'success': False, 'error': 'Internal server error'}), 500
+
 # ── Observability ─────────────────────────────────────────────────────────────
 @v1.route('/system-status', methods=['GET'])
 def system_status():
     status = {
         'trading_systems_imported': SYSTEMS_AVAILABLE,
-        'swing_system_ready':       trading_api.swing_system is not None,
+        'swing_system_ready':        trading_api.swing_system is not None,
         'position_system_ready':    trading_api.position_system is not None,
         'fyers_configured':         bool(os.getenv('FYERS_APP_ID') and os.getenv('FYERS_ACCESS_TOKEN')),
         'redis_connected':          redis_client is not None,
-        'nse_symbol_list_loaded':   len(NSE_SYMBOLS) > 0,
-        'passlib_argon2':           PASSLIB_AVAILABLE,
+        'nse_symbol_list_loaded':    len(NSE_SYMBOLS) > 0,
+        'passlib_argon2':            PASSLIB_AVAILABLE,
         'smtp_configured':          bool(os.getenv('SMTP_HOST')),
-        'database':                 'connected',
+        'database':                  'connected',
     }
     try:
         db.session.execute(db.text('SELECT 1'))
@@ -1716,10 +1884,11 @@ def audit_log():
         'created_at':     r.created_at.isoformat(),
     } for r in rows]
     return jsonify({'success': True, 'data': data, 'period_days': since_days})
+
 # ── Register blueprint + legacy aliases ──────────────────────────────────────
 app.register_blueprint(v1)
 
-@app.route('/api/stocks',                     methods=['GET'])
+@app.route('/api/stocks',                   methods=['GET'])
 def legacy_stocks():         return get_all_stocks()
 
 @app.route('/api/analyze/swing/<symbol>',    methods=['GET'])
@@ -1735,6 +1904,7 @@ def legacy_health():         return jsonify({'success': True, 'status': 'alive'}
 
 @app.route('/api/disclaimer',               methods=['GET'])
 def legacy_disclaimer():     return jsonify({'success': True, 'data': SEBI_DISCLAIMER})
+
 # ── Error handlers ────────────────────────────────────────────────────────────
 @app.errorhandler(404)
 def not_found(_):    return jsonify({'success': False, 'error': 'Endpoint not found'}), 404
@@ -1744,6 +1914,7 @@ def rate_limited(_): return jsonify({'success': False, 'error': 'Rate limit exce
 
 @app.errorhandler(500)
 def server_error(_): return jsonify({'success': False, 'error': 'Internal server error'}), 500
+
 # ── Entrypoint ────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     from waitress import serve
