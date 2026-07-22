@@ -39,22 +39,74 @@ TRADING_DAYS = 252
 # Each cycle: name, start (entry) date, end date, and the 10 bare symbols.
 # Dates are the actual holding window. Symbols must be bare (no .NSE).
 # >>> REPLACE THESE with your real 9 cycles. Two templates shown. <<<
+# Each cycle: name, start, end, symbols. Optionally `shares` (rupee-weighted
+# by actual holdings) — if omitted, the cycle is treated as equal-weighted.
+# `entry` prices are optional; when present the script cross-checks them
+# against the Fyers close on the start date and warns on mismatch.
 CYCLES = [
     {
+        "name": "Dec 11",
+        "start": "2025-12-11", "end": "2025-12-24",
+        "symbols": ["CLEAN","METROBRAND","GODREJCP","GRANULES","IDFCFIRSTB",
+                    "HDFCLIFE","MANAPPURAM","PNBHOUSING","UTIAMC","FINPIPE"],
+        "shares":  [11,8,8,17,124,12,35,11,8,60],
+        "entry":   [898.05,1165.80,1147.90,564.75,80.61,775.20,285.15,900.15,1124.20,165.43],
+    },
+    {
+        "name": "P5 (Feb 4-23)",
+        "start": "2026-02-04", "end": "2026-02-23",
+        "symbols": ["LUPIN","NESTLEIND","COALINDIA","SBIN","AXISBANK","TITAN",
+                    "TCS","NTPC","HCLTECH","ADANIPORTS","HINDALCO","BPCL"],
+        "shares":  [4,6,20,8,6,2,2,22,4,5,8,19],
+        "entry":   [2185.90,1308.00,429.40,1064.20,1356.20,4068.60,
+                    3225.30,358.55,1695.30,1530.80,955.30,373.45],
+    },
+    {
+        "name": "P1 (Apr 7-27)",
+        "start": "2026-04-07", "end": "2026-04-27",
+        "symbols": ["JUBLPHARMA","INDIANB","HINDCOPPER","WIPRO","ABFRL",
+                    "GODREJPROP","TATASTEEL","ADANIPORTS","JUSTDIAL","ROUTE"],
+        "entry":   [854.25,899.85,503.35,197.29,58.94,
+                    1584.70,196.10,1387.10,520.05,464.00],
+    },
+    {
+        "name": "P2 (Apr 27-May 12)",
+        "start": "2026-04-27", "end": "2026-05-12",
+        "symbols": ["COALINDIA","BRITANNIA","GODREJCP","AMBUJACEM","PIIND",
+                    "NYKAA","UPL","ACC","INDHOTEL","IRCTC"],
+        "shares":  [21,1,9,22,3,38,15,7,15,18],
+        "entry":   [456.00,5731.00,1090.00,451.00,3081.00,
+                    263.00,631.00,1413.00,635.00,541.00],
+    },
+    {
+        "name": "May 26-Jun 9 (was P3/P6)",
+        "start": "2026-05-26", "end": "2026-06-09",
+        "symbols": ["IOC","AMBUJACEM","ASHOKLEY","CANBK","PERSISTENT",
+                    "BPCL","PNB","ASTRAL","FINPIPE","HDFCLIFE"],
+        "shares":  [69,22,60,74,1,32,94,6,56,16],
+        "entry":   [144,442,164,134,5038,308,106,1552,176,620],
+    },
+    {
+        "name": "P8 (Jun 15)",
+        "start": "2026-06-15", "end": "2026-06-29",
+        "symbols": ["TVSMOTOR","HAVELLS","CANBK","IRCTC","M&M","UTIAMC",
+                    "HEROMOTOCO","BATAINDIA","NAZARA","IGL"],
+        "shares":  [2,8,74,19,3,10,1,14,34,60],
+        "entry":   [3395,1184,134,526,3100,944,5037,687,287,166],
+    },
+    {
         "name": "Jul 7",
-        "start": "2026-07-07",
-        "end":   "2026-07-21",
+        "start": "2026-07-07", "end": "2026-07-21",
         "symbols": ["SIGNATURE","HAPPSTMNDS","SBIN","HINDUNILVR","AUBANK",
                     "PERSISTENT","BEL","DEVYANI","ESCORTS","MUTHOOTFIN"],
     },
     {
         "name": "Jul 8 (12:15)",
-        "start": "2026-07-08",
-        "end":   "2026-07-22",
+        "start": "2026-07-08", "end": "2026-07-22",
         "symbols": ["DEVYANI","PERSISTENT","TECHM","HAPPSTMNDS","SBIN",
                     "BALKRISIND","ESCORTS","MUTHOOTFIN","JUBLPHARMA","HEROMOTOCO"],
     },
-    # ... add the other 7 cycles here (Jan14, P1, P2, P3, P5, P6, P8) ...
+    # Jan 14 cycle — add when tickers/entries recovered.
 ]
 
 NIFTY_FYERS = "NSE:NIFTY50-INDEX"
@@ -96,32 +148,53 @@ def fetch_nifty_closes(swing, start, end):
 def parse(d): return datetime.strptime(d, "%Y-%m-%d").date()
 
 def build_cycle_nav(swing, cyc):
-    """Equal-weighted daily NAV for a cycle. Returns (dates, nav_returns_pct,
-    per_symbol_total_return) or (None,None,None) if data missing."""
+    """Daily NAV for a cycle. Rupee-weighted by `shares` if provided, else
+    equal-weighted. Returns (dates, nav_returns_pct, per_symbol_total_return)
+    or (None,None,None) if data missing.
+
+    If `entry` prices are provided, cross-checks each against the Fyers close
+    on the start date and warns on >2% mismatch (catches transcription slips)."""
     start, end = parse(cyc["start"]), parse(cyc["end"])
-    series = {}
-    per_symbol = {}
-    for sym in cyc["symbols"]:
+    syms   = cyc["symbols"]
+    shares = cyc.get("shares")          # None => equal weight
+    entries= cyc.get("entry")           # None => no cross-check
+    sym_shares = dict(zip(syms, shares)) if shares else None
+    sym_entry  = dict(zip(syms, entries)) if entries else None
+
+    series = {}          # sym -> {date: normalized_price (1.0 at entry)}
+    per_symbol = {}      # sym -> total % return
+    weights = {}         # sym -> rupee weight at entry (for weighted NAV)
+    for sym in syms:
         rows = fetch_daily_closes(swing, sym, start, end)
         if not rows or len(rows) < 2:
-            print(f"    ! insufficient data for {sym} — cycle NAV will skip it")
+            print(f"    ! insufficient data for {sym} — skipped in NAV")
             continue
         dates = [r[0] for r in rows]; closes = [r[1] for r in rows]
         entry = closes[0]
-        # normalized price path (1.0 at entry)
+        # entry cross-check vs recorded price
+        if sym_entry and sym in sym_entry:
+            rec = sym_entry[sym]
+            if rec and abs(closes[0]-rec)/rec > 0.02:
+                print(f"    ~ {sym}: Fyers entry-day close ₹{closes[0]:.2f} vs "
+                      f"recorded ₹{rec:.2f} ({(closes[0]-rec)/rec*100:+.1f}%) — check")
         series[sym] = {d: c/entry for d, c in zip(dates, closes)}
         per_symbol[sym] = (closes[-1]/entry - 1.0) * 100
+        # rupee weight = entry_price * shares (if shares given) else 1 (equal)
+        weights[sym] = (entry * sym_shares[sym]) if sym_shares else 1.0
     if not series:
-        return None, None, None
-    # union of dates, equal-weight average of normalized paths
+        return None, None, None, None
+    wsum = sum(weights.values())
+    # weighted daily NAV: sum_i w_i * normalized_price_i / sum(w)
     all_dates = sorted(set().union(*[set(s.keys()) for s in series.values()]))
     nav = []
     for d in all_dates:
-        vals = [s[d] for s in series.values() if d in s]
-        nav.append(sum(vals)/len(vals))
+        num = sum(weights[s]*series[s][d] for s in series if d in series[s])
+        den = sum(weights[s] for s in series if d in series[s])
+        nav.append(num/den if den else 1.0)
     nav = np.array(nav)
     daily_ret = np.diff(nav)/nav[:-1] * 100  # daily % returns of the book
-    return all_dates, daily_ret, per_symbol
+    book_ret_weighted = (nav[-1] - 1.0) * 100  # final weighted book return %
+    return all_dates, daily_ret, per_symbol, book_ret_weighted
 
 def trade_stats(all_trades):
     """all_trades = list of per-position % returns across all cycles."""
@@ -191,16 +264,18 @@ def main():
 
     for cyc in CYCLES:
         print(f"\n▶ {cyc['name']} ({cyc['start']} → {cyc['end']})")
-        dates, daily_ret, per_symbol = build_cycle_nav(swing, cyc)
-        if per_symbol is None:
+        result = build_cycle_nav(swing, cyc)
+        if result[2] is None:
             print("   skipped — no data"); continue
+        dates, daily_ret, per_symbol, book_ret_w = result
 
         # trade-level: each position's total return, minus costs
         for sym, r in per_symbol.items():
             r_net = r - COST_BPS/100.0
             all_trades.append(r_net)
-        # cycle-level: equal-weighted book return
-        book_ret = np.mean(list(per_symbol.values())) - COST_BPS/100.0
+        # cycle-level: rupee-weighted (or equal-weighted) book return
+        wtag = "wtd" if cyc.get("shares") else "eq"
+        book_ret = book_ret_w - COST_BPS/100.0
         cycle_rets.append(book_ret)
         if daily_ret is not None:
             pooled_daily.extend(daily_ret.tolist())
@@ -213,7 +288,7 @@ def main():
             nret = 0.0
             print("   ! NIFTY data missing — using 0 (fix before trusting alpha)")
         nifty_rets.append(nret)
-        print(f"   book {book_ret:+.2f}%  nifty {nret:+.2f}%  alpha {book_ret-nret:+.2f}%")
+        print(f"   book {book_ret:+.2f}% [{wtag}]  nifty {nret:+.2f}%  alpha {book_ret-nret:+.2f}%")
 
     if not all_trades:
         print("\nNo data computed. Fill CYCLES with valid symbols/dates and rerun.")
