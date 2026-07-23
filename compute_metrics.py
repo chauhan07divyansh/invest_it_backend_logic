@@ -35,6 +35,9 @@ import numpy as np
 COST_BPS = 0          # round-trip cost in basis points (e.g. 30 = 0.30%). 0 = paper.
 RISK_FREE_ANNUAL = 0.065   # ~6.5% Indian risk-free, for Sharpe
 TRADING_DAYS = 252
+# Must reach back to your OLDEST cycle. "1y" covers Dec-2025 onward.
+# If a cycle prints "NO ROWS ... widen LOOKBACK", bump this to "2y".
+LOOKBACK = "1y"
 
 # Each cycle: name, start (entry) date, end date, and the 10 bare symbols.
 # Dates are the actual holding window. Symbols must be bare (no .NSE).
@@ -119,27 +122,59 @@ def get_provider():
 
 def fetch_daily_closes(swing, symbol, start, end):
     """Return list of (date, close) for a symbol over [start,end] inclusive.
-    Uses the same provider path the swing system uses. Falls back gracefully."""
+
+    NOTE: period must be wide enough to reach the OLDEST cycle. A "3mo" pull
+    silently returns nothing for cycles older than ~3 months, which produces
+    dropped/garbage cycles. "1y" covers Dec-2025 onward. If you add cycles
+    older than 1 year, widen this to "2y"."""
     try:
-        # period wide enough to cover the window; provider returns a DataFrame
-        df, _, _ = swing.get_indian_stock_data(symbol, period="3mo")
+        df, _, _ = swing.get_indian_stock_data(symbol, period=LOOKBACK)
         if df is None or df.empty:
+            print(f"    ! no data returned at all for {symbol}")
             return None
+        full_lo, full_hi = df.index.date.min(), df.index.date.max()
         df = df[(df.index.date >= start) & (df.index.date <= end)]
         if df.empty:
+            print(f"    ! {symbol}: NO ROWS in {start}..{end} "
+                  f"(provider only has {full_lo}..{full_hi}) — widen LOOKBACK")
             return None
         return [(d.date(), float(c)) for d, c in zip(df.index, df["Close"])]
     except Exception as e:
         print(f"    ! fetch failed {symbol}: {e}")
         return None
 
+_NIFTY_CACHE = {}
+
 def fetch_nifty_closes(swing, start, end):
+    """Fetch NIFTY closes for an explicit window. The swing system's own
+    _fetch_nifty_index() is hardcoded to ~120 days, which cannot reach older
+    cycles — so pull directly from the paginated fetcher with real dates."""
+    key = (start, end)
+    if key in _NIFTY_CACHE:
+        return _NIFTY_CACHE[key]
     try:
-        df = swing._fetch_nifty_index()
+        df = swing.data_provider.fyers.fetch_paginated_history(
+            symbol=NIFTY_FYERS, resolution='D',
+            start_date=start - timedelta(days=5),   # pad for holidays
+            end_date=end + timedelta(days=5),
+        )
         if df is None or df.empty:
+            print("    ! NIFTY: no data for window")
             return None
-        df = df[(df.index.date >= start) & (df.index.date <= end)]
-        return [(d.date(), float(c)) for d, c in zip(df.index, df["Close"])]
+        df = df.copy()
+        df.columns = [str(c).lower() for c in df.columns]
+        if 'close' not in df.columns:
+            print(f"    ! NIFTY: no close column ({list(df.columns)})")
+            return None
+        idx = df.index
+        dates = [d.date() if hasattr(d, 'date') else d for d in idx]
+        rows = [(d, float(c)) for d, c in zip(dates, df['close'])
+                if start <= d <= end]
+        if not rows:
+            print(f"    ! NIFTY: no rows in {start}..{end}")
+            return None
+        _NIFTY_CACHE[key] = rows
+        return rows
     except Exception as e:
         print(f"    ! NIFTY fetch failed: {e}")
         return None
@@ -261,13 +296,18 @@ def main():
 
     all_trades = []
     cycle_rets, nifty_rets, pooled_daily = [], [], []
+    ran, failed = [], []
 
     for cyc in CYCLES:
         print(f"\n▶ {cyc['name']} ({cyc['start']} → {cyc['end']})")
         result = build_cycle_nav(swing, cyc)
         if result[2] is None:
-            print("   skipped — no data"); continue
+            print("   ✗ SKIPPED — no usable data")
+            failed.append(cyc['name']); continue
         dates, daily_ret, per_symbol, book_ret_w = result
+        got, want = len(per_symbol), len(cyc['symbols'])
+        if got < want:
+            print(f"   ⚠ only {got}/{want} symbols had data — return is partial")
 
         # trade-level: each position's total return, minus costs
         for sym, r in per_symbol.items():
@@ -288,7 +328,16 @@ def main():
             nret = 0.0
             print("   ! NIFTY data missing — using 0 (fix before trusting alpha)")
         nifty_rets.append(nret)
+        ran.append(cyc['name'])
         print(f"   book {book_ret:+.2f}% [{wtag}]  nifty {nret:+.2f}%  alpha {book_ret-nret:+.2f}%")
+
+    print("\n" + "="*66)
+    print(f"COVERAGE: {len(ran)}/{len(CYCLES)} cycles computed")
+    if failed:
+        print(f"  ✗ FAILED: {', '.join(failed)}")
+        print("    → Stats below EXCLUDE these. Fix before trusting any number.")
+    else:
+        print("  ✓ all cycles computed")
 
     if not all_trades:
         print("\nNo data computed. Fill CYCLES with valid symbols/dates and rerun.")
