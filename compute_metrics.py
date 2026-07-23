@@ -182,6 +182,50 @@ def fetch_nifty_closes(swing, start, end):
 # ───────────────────────── CORE MATH ─────────────────────────
 def parse(d): return datetime.strptime(d, "%Y-%m-%d").date()
 
+def simulate_exits(entry, stop, t1, t2, t3, bars, same_day_stop_first=True):
+    """Simulate YOUR actual rules on daily OHLC:
+         - low <= stop            -> exit ALL at stop
+         - high >= T1             -> book 50% at T1, stop moves to entry (BE)
+         - after T1, high >= T2/T3-> exit remainder at that target
+         - both stop & target same day -> assume STOP first (conservative,
+           because daily bars can't tell you which came first)
+       Anything still held at window end is marked to the final close.
+       Returns total % return on the position."""
+    booked, rem, cur_stop, t1_done = 0.0, 1.0, stop, False
+    for _d, h, l, c in bars:
+        if rem <= 0: break
+        stop_hit = l <= cur_stop
+        t1_hit   = (not t1_done) and h >= t1
+        tgt_hit  = t1_done and (h >= t2 or h >= t3)
+        if stop_hit and (t1_hit or tgt_hit) and same_day_stop_first:
+            booked += rem*(cur_stop-entry)/entry*100; rem = 0; break
+        if stop_hit:
+            booked += rem*(cur_stop-entry)/entry*100; rem = 0; break
+        if t1_hit:
+            booked += 0.5*(t1-entry)/entry*100
+            rem, cur_stop, t1_done = 0.5, entry, True
+            if h >= t3:   booked += rem*(t3-entry)/entry*100; rem = 0; break
+            elif h >= t2: booked += rem*(t2-entry)/entry*100; rem = 0; break
+            continue
+        if tgt_hit:
+            px = t3 if h >= t3 else t2
+            booked += rem*(px-entry)/entry*100; rem = 0; break
+    if rem > 0:
+        booked += rem*(bars[-1][3]-entry)/entry*100
+    return booked
+
+def fetch_ohlc(swing, symbol, start, end):
+    """Daily (date, high, low, close) over the window — needed for exit sim."""
+    try:
+        df, _, _ = swing.get_indian_stock_data(symbol, period=LOOKBACK)
+        if df is None or df.empty: return None
+        df = df[(df.index.date >= start) & (df.index.date <= end)]
+        if df.empty: return None
+        return [(d.date(), float(h), float(l), float(c))
+                for d, h, l, c in zip(df.index, df["High"], df["Low"], df["Close"])]
+    except Exception:
+        return None
+
 def build_cycle_nav(swing, cyc):
     """Daily NAV for a cycle. Rupee-weighted by `shares` if provided, else
     equal-weighted. Returns (dates, nav_returns_pct, per_symbol_total_return)
@@ -195,6 +239,11 @@ def build_cycle_nav(swing, cyc):
     entries= cyc.get("entry")           # None => no cross-check
     sym_shares = dict(zip(syms, shares)) if shares else None
     sym_entry  = dict(zip(syms, entries)) if entries else None
+    sym_stop = dict(zip(syms, cyc["stop"]))  if cyc.get("stop")  else None
+    sym_t1   = dict(zip(syms, cyc["t1"]))    if cyc.get("t1")    else None
+    sym_t2   = dict(zip(syms, cyc["t2"]))    if cyc.get("t2")    else None
+    sym_t3   = dict(zip(syms, cyc["t3"]))    if cyc.get("t3")    else None
+    per_symbol_exit = {}
 
     series = {}          # sym -> {date: normalized_price (1.0 at ENTRY)}
     per_symbol = {}      # sym -> total % return (from recorded entry if given)
@@ -223,8 +272,17 @@ def build_cycle_nav(swing, cyc):
         per_symbol[sym]      = (closes[-1]/entry - 1.0) * 100
         per_symbol_cons[sym] = (closes[-1]/day0_close - 1.0) * 100
         weights[sym] = (entry * sym_shares[sym]) if sym_shares else 1.0
+        # exit-rule simulation (needs stop + T1/T2/T3 for this symbol)
+        if sym_stop and sym_t1 and sym_stop.get(sym) and sym_t1.get(sym):
+            bars = fetch_ohlc(swing, sym, start, end)
+            if bars:
+                per_symbol_exit[sym] = simulate_exits(
+                    entry, sym_stop[sym], sym_t1[sym],
+                    sym_t2.get(sym, sym_t1[sym]) if sym_t2 else sym_t1[sym],
+                    sym_t3.get(sym, sym_t1[sym]) if sym_t3 else sym_t1[sym],
+                    bars)
     if not series:
-        return None, None, None, None, None
+        return None, None, None, None, None, None
     # weighted daily NAV: sum_i w_i * normalized_price_i / sum(w)
     all_dates = sorted(set().union(*[set(s.keys()) for s in series.values()]))
     nav = []
@@ -245,7 +303,7 @@ def build_cycle_nav(swing, cyc):
                         * wc[s] for s in wc)/tw if tw else np.mean(list(wc.values()))
     else:
         book_cons = float(np.mean(list(wc.values())))
-    return all_dates, daily_ret, per_symbol, book_ret_weighted, book_cons
+    return all_dates, daily_ret, per_symbol, book_ret_weighted, book_cons, per_symbol_exit
 
 def trade_stats(all_trades):
     """all_trades = list of per-position % returns across all cycles."""
@@ -312,6 +370,7 @@ def main():
 
     all_trades = []
     cycle_rets, nifty_rets, pooled_daily, cons_rets = [], [], [], []
+    exit_rets, exit_nifty = [], []
     ran, failed = [], []
 
     for cyc in CYCLES:
@@ -320,7 +379,7 @@ def main():
         if result[2] is None:
             print("   ✗ SKIPPED — no usable data")
             failed.append(cyc['name']); continue
-        dates, daily_ret, per_symbol, book_ret_w, book_cons = result
+        dates, daily_ret, per_symbol, book_ret_w, book_cons, per_sym_exit = result
         got, want = len(per_symbol), len(cyc['symbols'])
         if got < want:
             print(f"   ⚠ only {got}/{want} symbols had data — return is partial")
@@ -349,6 +408,18 @@ def main():
         print(f"   book {book_ret:+.2f}% [{wtag}]  nifty {nret:+.2f}%  "
               f"alpha {book_ret-nret:+.2f}%   (conservative entry: "
               f"{book_cons:+.2f}%, alpha {book_cons-nret:+.2f}%)")
+        if per_sym_exit:
+            if cyc.get("shares"):
+                tw = sum(cyc["shares"][i]*cyc["entry"][i]
+                         for i,sy in enumerate(cyc["symbols"]) if sy in per_sym_exit)
+                be = sum(cyc["shares"][i]*cyc["entry"][i]*per_sym_exit[sy]
+                         for i,sy in enumerate(cyc["symbols"]) if sy in per_sym_exit)/tw
+            else:
+                be = float(np.mean(list(per_sym_exit.values())))
+            be -= COST_BPS/100.0
+            exit_rets.append(be); exit_nifty.append(nret)
+            print(f"   WITH EXIT RULES: {be:+.2f}%  alpha {be-nret:+.2f}%  "
+                  f"({len(per_sym_exit)}/{len(cyc['symbols'])} positions modelled)")
 
     print("\n" + "="*66)
     print(f"COVERAGE: {len(ran)}/{len(CYCLES)} cycles computed")
@@ -405,6 +476,16 @@ def main():
         print(f"  Alpha hit rate:    {(ca>0).mean()*100:.0f}%")
         print("  (Your recorded entries were intraday signal prices; this row")
         print("   shows what you'd have got buying at that day's CLOSE instead.)")
+
+    if exit_rets:
+        ea = np.array(exit_rets)-np.array(exit_nifty)
+        print("\n  --- WITH YOUR EXIT RULES (stop / book 50% at T1 / T2-T3) ---")
+        print(f"  Cycles modelled:   {len(exit_rets)}")
+        print(f"  Avg cycle return:  {np.mean(exit_rets):+.2f}%")
+        print(f"  Avg alpha:         {ea.mean():+.2f}%   median {np.median(ea):+.2f}%")
+        print(f"  Alpha hit rate:    {(ea>0).mean()*100:.0f}%")
+        print("  Assumptions: stop fills AT the stop price (no gap slippage);")
+        print("  if stop and target hit the same day, stop assumed first.")
 
     print("\n" + "="*66)
     print("DILIGENCE NOTES (read before quoting these)")
