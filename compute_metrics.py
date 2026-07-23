@@ -196,29 +196,35 @@ def build_cycle_nav(swing, cyc):
     sym_shares = dict(zip(syms, shares)) if shares else None
     sym_entry  = dict(zip(syms, entries)) if entries else None
 
-    series = {}          # sym -> {date: normalized_price (1.0 at entry)}
-    per_symbol = {}      # sym -> total % return
-    weights = {}         # sym -> rupee weight at entry (for weighted NAV)
+    series = {}          # sym -> {date: normalized_price (1.0 at ENTRY)}
+    per_symbol = {}      # sym -> total % return (from recorded entry if given)
+    per_symbol_cons = {} # sym -> total % return (conservative: entry-day close)
+    weights = {}         # sym -> rupee weight at entry
+    used_recorded = False
     for sym in syms:
         rows = fetch_daily_closes(swing, sym, start, end)
         if not rows or len(rows) < 2:
             print(f"    ! insufficient data for {sym} — skipped in NAV")
             continue
         dates = [r[0] for r in rows]; closes = [r[1] for r in rows]
-        entry = closes[0]
-        # entry cross-check vs recorded price
-        if sym_entry and sym in sym_entry:
-            rec = sym_entry[sym]
-            if rec and abs(closes[0]-rec)/rec > 0.02:
-                print(f"    ~ {sym}: Fyers entry-day close ₹{closes[0]:.2f} vs "
-                      f"recorded ₹{rec:.2f} ({(closes[0]-rec)/rec*100:+.1f}%) — check")
+        day0_close = closes[0]
+        # BUY PRICE: your recorded entry if supplied, else the entry-day close.
+        # Portfolios were generated intraday, so the recorded entry is the price
+        # the signal actually fired at — using day0 close discards the day-1 move.
+        rec = sym_entry.get(sym) if sym_entry else None
+        if rec:
+            entry = float(rec); used_recorded = True
+            if abs(day0_close-rec)/rec > 0.02:
+                print(f"    ~ {sym}: entry-day close ₹{day0_close:.2f} vs "
+                      f"recorded ₹{rec:.2f} ({(day0_close-rec)/rec*100:+.1f}%)")
+        else:
+            entry = day0_close
         series[sym] = {d: c/entry for d, c in zip(dates, closes)}
-        per_symbol[sym] = (closes[-1]/entry - 1.0) * 100
-        # rupee weight = entry_price * shares (if shares given) else 1 (equal)
+        per_symbol[sym]      = (closes[-1]/entry - 1.0) * 100
+        per_symbol_cons[sym] = (closes[-1]/day0_close - 1.0) * 100
         weights[sym] = (entry * sym_shares[sym]) if sym_shares else 1.0
     if not series:
-        return None, None, None, None
-    wsum = sum(weights.values())
+        return None, None, None, None, None
     # weighted daily NAV: sum_i w_i * normalized_price_i / sum(w)
     all_dates = sorted(set().union(*[set(s.keys()) for s in series.values()]))
     nav = []
@@ -226,10 +232,20 @@ def build_cycle_nav(swing, cyc):
         num = sum(weights[s]*series[s][d] for s in series if d in series[s])
         den = sum(weights[s] for s in series if d in series[s])
         nav.append(num/den if den else 1.0)
-    nav = np.array(nav)
+    # anchor at the entry itself (1.0) so the entry→first-close move counts
+    nav = np.array([1.0] + nav)
     daily_ret = np.diff(nav)/nav[:-1] * 100  # daily % returns of the book
     book_ret_weighted = (nav[-1] - 1.0) * 100  # final weighted book return %
-    return all_dates, daily_ret, per_symbol, book_ret_weighted
+    # conservative book return (buy at entry-day close)
+    wc = {s: (per_symbol_cons[s]) for s in per_symbol_cons}
+    if sym_shares:
+        tw = sum(sym_shares[s]*sym_entry[s] if sym_entry and sym_entry.get(s)
+                 else sym_shares[s] for s in wc)
+        book_cons = sum((sym_shares[s]*(sym_entry[s] if sym_entry and sym_entry.get(s) else 1))
+                        * wc[s] for s in wc)/tw if tw else np.mean(list(wc.values()))
+    else:
+        book_cons = float(np.mean(list(wc.values())))
+    return all_dates, daily_ret, per_symbol, book_ret_weighted, book_cons
 
 def trade_stats(all_trades):
     """all_trades = list of per-position % returns across all cycles."""
@@ -295,7 +311,7 @@ def main():
     print("="*66)
 
     all_trades = []
-    cycle_rets, nifty_rets, pooled_daily = [], [], []
+    cycle_rets, nifty_rets, pooled_daily, cons_rets = [], [], [], []
     ran, failed = [], []
 
     for cyc in CYCLES:
@@ -304,7 +320,7 @@ def main():
         if result[2] is None:
             print("   ✗ SKIPPED — no usable data")
             failed.append(cyc['name']); continue
-        dates, daily_ret, per_symbol, book_ret_w = result
+        dates, daily_ret, per_symbol, book_ret_w, book_cons = result
         got, want = len(per_symbol), len(cyc['symbols'])
         if got < want:
             print(f"   ⚠ only {got}/{want} symbols had data — return is partial")
@@ -329,7 +345,10 @@ def main():
             print("   ! NIFTY data missing — using 0 (fix before trusting alpha)")
         nifty_rets.append(nret)
         ran.append(cyc['name'])
-        print(f"   book {book_ret:+.2f}% [{wtag}]  nifty {nret:+.2f}%  alpha {book_ret-nret:+.2f}%")
+        cons_rets.append(book_cons - COST_BPS/100.0)
+        print(f"   book {book_ret:+.2f}% [{wtag}]  nifty {nret:+.2f}%  "
+              f"alpha {book_ret-nret:+.2f}%   (conservative entry: "
+              f"{book_cons:+.2f}%, alpha {book_cons-nret:+.2f}%)")
 
     print("\n" + "="*66)
     print(f"COVERAGE: {len(ran)}/{len(CYCLES)} cycles computed")
@@ -377,6 +396,15 @@ def main():
     dc = f"{ps['down_capture']:.0f}%" if ps['down_capture'] is not None else "n/a (no down cycles)"
     print(f"  Up-capture:        {uc}")
     print(f"  Down-capture:      {dc}")
+
+    if cons_rets:
+        ca=np.array(cons_rets)-np.array(nifty_rets)
+        print("\n  --- CONSERVATIVE BASIS (buy at entry-day close, not signal price) ---")
+        print(f"  Avg cycle return:  {np.mean(cons_rets):+.2f}%")
+        print(f"  Avg alpha:         {ca.mean():+.2f}%   median {np.median(ca):+.2f}%")
+        print(f"  Alpha hit rate:    {(ca>0).mean()*100:.0f}%")
+        print("  (Your recorded entries were intraday signal prices; this row")
+        print("   shows what you'd have got buying at that day's CLOSE instead.)")
 
     print("\n" + "="*66)
     print("DILIGENCE NOTES (read before quoting these)")
