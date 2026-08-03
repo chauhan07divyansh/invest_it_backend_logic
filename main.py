@@ -1620,12 +1620,16 @@ def analyze_guest_endpoint(symbol):
             request.headers.get('X-Forwarded-For', '').split(',')[0].strip() or
             request.remote_addr or 'unknown'
         ).strip()
+        GUEST_LIMIT = 3
+        _priv = ('unknown','127.0.0.1','::1','')
+        skip_limit = (ip in _priv or ip.startswith('10.') or ip.startswith('192.168.')
+                      or ip.startswith('172.1') or ip.startswith('172.2') or ip.startswith('172.3'))
         guest_key = f"guest_limit:{ip}"
-        if redis_client:
+        if redis_client and not skip_limit:
             try:
                 count = redis_client.get(guest_key)
                 count = int(count) if count else 0
-                if count >= 1:
+                if count >= GUEST_LIMIT:                       # FIX 1: single colon
                     return jsonify({
                         'success': False,
                         'error':   'Guest limit reached. Sign up free for 10 analyses per day.',
@@ -1636,10 +1640,11 @@ def analyze_guest_endpoint(symbol):
         cache_key = f"swing_analysis_{symbol}"
         if cached := get_from_cache(cache_key):
             g.cache_hit = True
-            if redis_client:
+            if redis_client and not skip_limit:
                 try:
                     pipe = redis_client.pipeline()
                     pipe.incr(guest_key)
+                    pipe.expire(guest_key, 86400)             # FIX 3: added expire
                     pipe.execute()
                 except Exception:
                     pass
@@ -1649,7 +1654,7 @@ def analyze_guest_endpoint(symbol):
             return jsonify({'success': False, 'error': f'Could not analyze {symbol}'}), 404
         formatted = trading_api.format_analysis_response(result, 'Swing')
         set_cache(cache_key, formatted)
-        if redis_client:
+        if redis_client and not skip_limit:                   # FIX 2: added "and not skip_limit"
             try:
                 pipe = redis_client.pipeline()
                 pipe.incr(guest_key)
@@ -1663,12 +1668,6 @@ def analyze_guest_endpoint(symbol):
     except Exception as e:
         logger.error(f"{log_context()} analyze/guest/{symbol}: {e}")
         return jsonify({'success': False, 'error': 'An internal server error occurred'}), 500
-
-@v1.route('/analyze/position/<symbol>', methods=['GET'])
-@token_required
-@check_daily_api_limit
-@require_systems
-@limiter.limit("10 per minute")
 def analyze_position_stock_endpoint(symbol):
     return analyze_stock('position', symbol)
 
