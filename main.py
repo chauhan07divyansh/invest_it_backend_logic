@@ -1668,6 +1668,11 @@ def analyze_guest_endpoint(symbol):
     except Exception as e:
         logger.error(f"{log_context()} analyze/guest/{symbol}: {e}")
         return jsonify({'success': False, 'error': 'An internal server error occurred'}), 500
+@v1.route('/analyze/position/<symbol>', methods=['GET'])
+@token_required
+@check_daily_api_limit
+@require_systems
+@limiter.limit("10 per minute")
 def analyze_position_stock_endpoint(symbol):
     return analyze_stock('position', symbol)
 
