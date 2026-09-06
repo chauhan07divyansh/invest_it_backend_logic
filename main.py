@@ -1076,24 +1076,16 @@ def _send_watchlist_email(to_email, msgs):
     if not smtp_host:
         logger.info(f"[notify][DEV] would email {to_email}: {[m for _,m in msgs]}")
         return True  # treat as sent in dev
-    lines = "".join(
-        f'<tr><td style="padding:10px 0;border-bottom:1px solid #1e2130;color:#fff;font-size:14px">{m}</td></tr>'
-        for _k, m in msgs)
-    html = f"""
-    <div style="font-family:sans-serif;max-width:600px;margin:0 auto;background:#0f1117;color:#fff;border-radius:12px;overflow:hidden">
-      <div style="padding:24px 32px;border-bottom:1px solid #1e2130">
-        <span style="font-size:20px;font-weight:bold">⚡ SentiQuant</span>
-        <p style="color:#8b8fa8;margin:4px 0 0;font-size:13px">Watchlist update</p>
-      </div>
-      <div style="padding:24px 32px">
-        <p style="color:#8b8fa8;font-size:13px;margin:0 0 12px">Technical changes on stocks you've analyzed:</p>
-        <table style="width:100%;border-collapse:collapse">{lines}</table>
-        <p style="color:#8b8fa8;font-size:11px;margin-top:20px;line-height:1.5">
-          These are AI-generated technical observations, not investment advice.
-          SentiQuant is not SEBI-registered. Past performance is not indicative of
-          future results. Always do your own research.</p>
-      </div>
-    </div>"""
+
+    from email_templates import (
+        render_watchlist_update_email,
+        updates_from_legacy_msgs,
+    )
+    # Convert legacy (kind, message) tuples -> structured update dicts,
+    # then render the redesigned light-theme template.
+    updates = updates_from_legacy_msgs(msgs)
+    html = render_watchlist_update_email(updates)
+
     msg = MIMEText(html, 'html')
     msg['Subject'] = f"SentiQuant: {len(msgs)} watchlist update{'s' if len(msgs)>1 else ''}"
     msg['From']    = os.getenv("SMTP_USER")
