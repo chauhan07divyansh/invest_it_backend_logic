@@ -27,6 +27,13 @@ main.py's `_detect_changes_for_item` still emits pre-formatted plain-text
 `updates_from_legacy_msgs()` — a best-effort parser that converts the tuples
 into the structured dicts. Migrating the detector to emit structured data
 directly is still recommended (see handoff notes).
+
+`render_portfolio_update_email()` renders the same row markup for the
+per-user TRACKED PORTFOLIO digest (T1 partial-close / T2 / stop-loss full
+close), via `_render_email_shell()` shared by both — only the header
+subtitle/preheader/intro copy differs. `evaluate_tracked_portfolios()` in
+main.py builds its update dicts directly in the structured shape (it has
+no legacy tuples to parse), so it skips `updates_from_legacy_msgs()`.
 """
 
 from __future__ import annotations
@@ -210,18 +217,11 @@ def _render_rows(updates) -> str:
 
 
 # ── Public API ───────────────────────────────────────────────────────────────
-def render_watchlist_update_email(updates) -> str:
-    """Return the full HTML document for the watchlist update digest email.
-
-    `updates` — list of dicts. Each dict:
-        {"symbol": "<TICKER>.<NSE|BSE>", "type": "signal_change",
-         "from": "<SIGNAL>", "to": "<SIGNAL>"}
-      or
-        {"symbol": "<TICKER>.<NSE|BSE>", "type": "price_alert",
-         "message": "<full sentence, may contain ₹ values>"}
-    """
-    rows_html = _render_rows(updates)
-
+def _render_email_shell(*, title: str, subtitle: str, preheader: str, intro: str, rows_html: str) -> str:
+    """Shared HTML document shell for digest-style emails. Both the watchlist
+    update and the portfolio (T1/T2/stop-loss) update emails render through
+    this — only the title/header-subtitle/preheader/intro copy differ; the
+    row markup (_render_rows et al.) is identical either way."""
     return f"""\
 <!DOCTYPE html>
 <html lang="en" xmlns="http://www.w3.org/1999/xhtml">
@@ -231,7 +231,7 @@ def render_watchlist_update_email(updates) -> str:
   <meta http-equiv="X-UA-Compatible" content="IE=edge">
   <meta name="color-scheme" content="dark">
   <meta name="supported-color-schemes" content="dark">
-  <title>SentiQuant watchlist update</title>
+  <title>{html.escape(title)}</title>
   <style>
     body {{ margin:0; padding:0; background:{_BG_OUTER}; -webkit-text-size-adjust:100%; -ms-text-size-adjust:100%; }}
     table {{ border-collapse:collapse; }}
@@ -248,7 +248,7 @@ def render_watchlist_update_email(updates) -> str:
 <body style="margin:0;padding:0;background:{_BG_OUTER};font-family:{_SANS};">
   <!-- preheader -->
   <div style="display:none;max-height:0;overflow:hidden;mso-hide:all;font-size:1px;line-height:1px;color:{_BG_OUTER};">
-    Technical changes on stocks you've analyzed.
+    {html.escape(preheader)}
   </div>
 
   <table role="presentation" class="sq-wrap" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:{_BG_OUTER};" bgcolor="{_BG_OUTER}">
@@ -269,7 +269,7 @@ def render_watchlist_update_email(updates) -> str:
                       SentiQuant
                     </div>
                     <div style="font-family:{_SANS};color:{_TEXT_MUTED};font-size:13px;line-height:1.4;margin-top:3px;">
-                      Watchlist update
+                      {html.escape(subtitle)}
                     </div>
                   </td>
                 </tr>
@@ -278,7 +278,7 @@ def render_watchlist_update_email(updates) -> str:
                 <tr>
                   <td class="sq-row" style="padding:20px 32px 0 32px;background-color:{_BG_CARD};" bgcolor="{_BG_CARD}">
                     <p style="margin:0 0 16px 0;color:{_TEXT_SECONDARY};font-size:13px;line-height:1.5;font-family:{_SANS};">
-                      Technical changes on stocks you've analyzed:
+                      {html.escape(intro)}
                     </p>
                   </td>
                 </tr>
@@ -315,6 +315,50 @@ def render_watchlist_update_email(updates) -> str:
   </table>
 </body>
 </html>"""
+
+
+def render_watchlist_update_email(updates) -> str:
+    """Return the full HTML document for the watchlist update digest email.
+
+    `updates` — list of dicts. Each dict:
+        {"symbol": "<TICKER>.<NSE|BSE>", "type": "signal_change",
+         "from": "<SIGNAL>", "to": "<SIGNAL>"}
+      or
+        {"symbol": "<TICKER>.<NSE|BSE>", "type": "price_alert",
+         "message": "<full sentence, may contain ₹ values>"}
+    """
+    return _render_email_shell(
+        title="SentiQuant watchlist update",
+        subtitle="Watchlist update",
+        preheader="Technical changes on stocks you've analyzed.",
+        intro="Technical changes on stocks you've analyzed:",
+        rows_html=_render_rows(updates),
+    )
+
+
+def render_portfolio_update_email(updates) -> str:
+    """Return the full HTML document for the TRACKED-PORTFOLIO update digest
+    email — sent when evaluate_tracked_portfolios() partial-closes (T1) or
+    fully closes (T2 / stop-loss) a position the user is tracking.
+
+    Deliberately a DISTINCT subject/header/intro from the watchlist email
+    (not just a reused copy): these describe real position lifecycle events
+    on capital the user has actually allocated, not observational technical
+    commentary on a stock someone is merely watching — conflating the two
+    under "Watchlist update" would undersell what actually happened.
+    The row markup itself (_render_rows) is fully shared with the watchlist
+    email; only the shell copy differs.
+
+    `updates` — same {"symbol", "type": "price_alert", "message"} shape as
+    the watchlist email's structured updates (see updates_from_legacy_msgs).
+    """
+    return _render_email_shell(
+        title="SentiQuant portfolio update",
+        subtitle="Portfolio update",
+        preheader="A position you're tracking hit a target or stop-loss level.",
+        intro="Updates on positions you're tracking:",
+        rows_html=_render_rows(updates),
+    )
 
 
 # ── Interim shim: current (kind, message) tuples -> structured updates ────────
