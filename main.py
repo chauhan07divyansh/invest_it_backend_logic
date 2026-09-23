@@ -177,6 +177,78 @@ class TrackedPosition(db.Model):
             'partialExitDate': self.partial_exit_date,
         }
 
+class UserPortfolio(db.Model):
+    __tablename__ = 'user_portfolios'
+    id            = db.Column(db.String, primary_key=True)   # uuid string
+    user_id       = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    budget        = db.Column(db.Float, nullable=False)
+    risk_appetite = db.Column(db.String, nullable=False)
+    strategy      = db.Column(db.String, nullable=False)        # 'swing' etc
+    status        = db.Column(db.String, default='active')      # active | completed | cancelled
+    created_at    = db.Column(db.DateTime, default=datetime.utcnow)
+
+    positions = db.relationship('UserPortfolioPosition', backref='portfolio',
+                                 cascade='all, delete-orphan')
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'userId': self.user_id,
+            'budget': self.budget,
+            'riskAppetite': self.risk_appetite,
+            'strategy': self.strategy,
+            'status': self.status,
+            'createdAt': self.created_at.isoformat() if self.created_at else None,
+            'positions': [p.to_dict() for p in self.positions],
+        }
+
+class UserPortfolioPosition(db.Model):
+    __tablename__ = 'user_portfolio_positions'
+    id                   = db.Column(db.String, primary_key=True)   # uuid
+    portfolio_id         = db.Column(db.String, db.ForeignKey('user_portfolios.id'), nullable=False, index=True)
+    symbol               = db.Column(db.String, nullable=False)
+    name                 = db.Column(db.String)
+    entry_price          = db.Column(db.Float, nullable=False)
+    entry_date           = db.Column(db.DateTime, default=datetime.utcnow)
+    stop_loss            = db.Column(db.Float, nullable=False)
+    t1                   = db.Column(db.Float, nullable=False)
+    t2                   = db.Column(db.Float, nullable=False)
+    t3                   = db.Column(db.Float)
+    allocation_amount    = db.Column(db.Float)
+    shares               = db.Column(db.Integer)
+    ai_score             = db.Column(db.Integer)
+    status               = db.Column(db.String, default='open')     # open | partial_closed | closed
+    percent_closed       = db.Column(db.Float, default=0)           # 0, 50, or 100
+    partial_exit_price   = db.Column(db.Float)
+    partial_exit_date    = db.Column(db.DateTime)
+    exit_price           = db.Column(db.Float)                      # final full close price
+    exit_date            = db.Column(db.DateTime)
+    exit_reason          = db.Column(db.String)                     # 't1_partial' | 't2_hit' | 'stop_loss_hit' | null
+    last_checked_signal  = db.Column(db.String)                     # for future signal-flip detection, mirrors WatchlistItem's pattern
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'portfolioId': self.portfolio_id,
+            'symbol': self.symbol,
+            'name': self.name,
+            'entryPrice': self.entry_price,
+            'entryDate': self.entry_date.isoformat() if self.entry_date else None,
+            'stopLoss': self.stop_loss,
+            't1': self.t1, 't2': self.t2, 't3': self.t3,
+            'allocationAmount': self.allocation_amount,
+            'shares': self.shares,
+            'aiScore': self.ai_score,
+            'status': self.status,
+            'percentClosed': self.percent_closed if self.percent_closed is not None else 0,
+            'partialExitPrice': self.partial_exit_price,
+            'partialExitDate': self.partial_exit_date.isoformat() if self.partial_exit_date else None,
+            'exitPrice': self.exit_price,
+            'exitDate': self.exit_date.isoformat() if self.exit_date else None,
+            'exitReason': self.exit_reason,
+            'lastCheckedSignal': self.last_checked_signal,
+        }
+
 with app.app_context():
     db.create_all()
 
@@ -1069,25 +1141,121 @@ def run_notification_job():
     return {'scanned': scanned, 'changes': changed,
             'users_emailed': emailed, 'date': today}
 
-def _send_watchlist_email(to_email, msgs):
-    """Send ONE digest email listing the changes. Reuses SMTP env vars.
-    Observational wording + disclaimer. Returns True on success."""
+# ── Tracked-portfolio T1/T2/stop-loss evaluation ───────────────────────────────
+# Confirmed spec, per position (open or partial_closed; closed positions are
+# skipped forever):
+#   - Day 1-6 from entry, percent_closed==0, price >= t1
+#       -> partial close: percent_closed=50, partial_exit_price/date=today,
+#          status='partial_closed'. stop_loss is left UNCHANGED.
+#   - T1 not reached by day 6 -> no action; stays fully open, keep checking.
+#   - ANY day (0 onward), price >= t2 OR price <= stop_loss
+#       -> full close: status='closed', exit_price/date=today,
+#          exit_reason='t2_hit' | 'stop_loss_hit'.
+#   - Same-check double-trigger (both t2 and stop_loss crossed, e.g. a gap)
+#       -> stop_loss wins (protect capital first).
+# "Day 1" == entry day itself (0 days elapsed); "day 6" == 5 days elapsed.
+# That boundary (days_since_entry <= 5) is the one judgment call in this spec
+# that wasn't fully pinned down — flagged here and in the write-up.
+def evaluate_tracked_portfolios():
+    """Runs on the SAME trigger as run_notification_job() (see
+    /api/v1/jobs/run-notifications). Uses the same live-price lookup
+    (get_fresh_for_symbol) as the watchlist job, with an in-run cache so
+    repeated symbols across positions/users cost one lookup, not N.
+
+    DB changes are staged in-session and committed ONCE at the very end,
+    after every user's email attempt — a failed email must never discard a
+    real stop-loss/target close; correctness of the DB state takes priority
+    over notification delivery, per spec.
+
+    Safe to call repeatedly: once a position is 'closed' it's excluded by
+    the query filter below and never re-evaluated."""
+    from collections import defaultdict
+    today_dt = datetime.utcnow()
+    today    = today_dt.strftime('%Y-%m-%d')
+
+    positions = (UserPortfolioPosition.query
+                 .join(UserPortfolio, UserPortfolioPosition.portfolio_id == UserPortfolio.id)
+                 .filter(UserPortfolioPosition.status.in_(['open', 'partial_closed']),
+                         UserPortfolio.status == 'active')
+                 .all())
+
+    per_user_updates = defaultdict(list)   # user_id -> [structured update dicts]
+    price_cache = {}                       # symbol -> current_price (or None) for this run only
+    scanned = changed = 0
+
+    for pos in positions:
+        scanned += 1
+        symbol = pos.symbol
+        if symbol not in price_cache:
+            fresh = get_fresh_for_symbol(symbol)
+            price_cache[symbol] = (fresh or {}).get('current_price')
+        current_price = price_cache[symbol]
+        if current_price is None:
+            logger.warning(f"[portfolio-eval] no live price for {symbol} (position {pos.id}); skipped this run")
+            continue
+
+        user_id = pos.portfolio.user_id
+        days_since_entry = (today_dt.date() - pos.entry_date.date()).days if pos.entry_date else None
+
+        hit_stop = current_price <= pos.stop_loss
+        hit_t2   = current_price >= pos.t2
+
+        if hit_stop or hit_t2:
+            # stop_loss takes priority on a same-check double-trigger
+            reason = 'stop_loss_hit' if hit_stop else 't2_hit'
+            pos.status      = 'closed'
+            pos.exit_price  = current_price
+            pos.exit_date   = today_dt
+            pos.exit_reason = reason
+            label = 'stop-loss' if reason == 'stop_loss_hit' else 'target 2'
+            per_user_updates[user_id].append({
+                'symbol': symbol, 'type': 'price_alert',
+                'message': f"Position closed — {label} reached at ₹{current_price:,.2f}.",
+            })
+            changed += 1
+        elif ((pos.percent_closed or 0) == 0 and current_price >= pos.t1
+              and days_since_entry is not None and days_since_entry <= 5):
+            pos.percent_closed     = 50
+            pos.partial_exit_price = current_price
+            pos.partial_exit_date  = today_dt
+            pos.status             = 'partial_closed'
+            per_user_updates[user_id].append({
+                'symbol': symbol, 'type': 'price_alert',
+                'message': f"Target 1 reached at ₹{current_price:,.2f} — 50% booked, remainder still tracked.",
+            })
+            changed += 1
+        # else: no rule fired this run -> position untouched, re-checked next run
+
+    # Email affected users BEFORE the commit below (see docstring: a failed
+    # send must not cost us the position state change).
+    emailed = 0
+    for user_id, updates in per_user_updates.items():
+        user = User.query.get(user_id)
+        if not user or not user.email:
+            continue
+        pref = NotificationPref.query.filter_by(user_id=user_id).first()
+        if pref and not pref.email_enabled:
+            continue
+        if _send_portfolio_update_email(user.email, updates):
+            emailed += 1
+        else:
+            logger.warning(f"[portfolio-eval] email failed for user {user_id} — DB changes kept regardless")
+
+    db.session.commit()
+    return {'scanned': scanned, 'changes': changed,
+            'users_emailed': emailed, 'date': today}
+
+def _send_digest_email(to_email, subject, html):
+    """Shared SMTP mechanics for every digest-style email (watchlist AND
+    tracked-portfolio). Reuses SMTP env vars. Returns True on success (dev
+    mode with no SMTP_HOST configured logs and treats the send as OK)."""
     smtp_host = os.getenv("SMTP_HOST")
     if not smtp_host:
-        logger.info(f"[notify][DEV] would email {to_email}: {[m for _,m in msgs]}")
+        logger.info(f"[notify][DEV] would email {to_email}: {subject}")
         return True  # treat as sent in dev
 
-    from email_templates import (
-        render_watchlist_update_email,
-        updates_from_legacy_msgs,
-    )
-    # Convert legacy (kind, message) tuples -> structured update dicts,
-    # then render the redesigned light-theme template.
-    updates = updates_from_legacy_msgs(msgs)
-    html = render_watchlist_update_email(updates)
-
     msg = MIMEText(html, 'html')
-    msg['Subject'] = f"SentiQuant: {len(msgs)} watchlist update{'s' if len(msgs)>1 else ''}"
+    msg['Subject'] = subject
     msg['From']    = os.getenv("SMTP_USER")
     msg['To']      = to_email
     try:
@@ -1095,11 +1263,34 @@ def _send_watchlist_email(to_email, msgs):
             server.starttls()
             server.login(os.getenv("SMTP_USER"), os.getenv("SMTP_PASS"))
             server.sendmail(msg['From'], [to_email], msg.as_string())
-        logger.info(f"[notify] digest emailed to {to_email} ({len(msgs)} changes)")
+        logger.info(f"[notify] emailed {to_email}: {subject}")
         return True
     except Exception as e:
         logger.error(f"[notify] email failed for {to_email}: {e}")
         return False
+
+def _send_watchlist_email(to_email, msgs):
+    """Send ONE watchlist digest email. `msgs` is the legacy [(kind, message), ...]
+    list produced by run_notification_job(); converted to structured update
+    dicts before rendering. Observational wording + disclaimer."""
+    from email_templates import (
+        render_watchlist_update_email,
+        updates_from_legacy_msgs,
+    )
+    updates = updates_from_legacy_msgs(msgs)
+    html    = render_watchlist_update_email(updates)
+    subject = f"SentiQuant: {len(msgs)} watchlist update{'s' if len(msgs) > 1 else ''}"
+    return _send_digest_email(to_email, subject, html)
+
+def _send_portfolio_update_email(to_email, updates):
+    """Send ONE tracked-portfolio digest email. Unlike _send_watchlist_email,
+    `updates` here is ALREADY the structured {"symbol","type","message"} list
+    evaluate_tracked_portfolios() builds directly — no legacy-tuple parsing
+    needed, since there's no legacy caller for this path."""
+    from email_templates import render_portfolio_update_email
+    html    = render_portfolio_update_email(updates)
+    subject = f"SentiQuant: {len(updates)} portfolio update{'s' if len(updates) > 1 else ''}"
+    return _send_digest_email(to_email, subject, html)
 
 trading_api = TradingAPI()
 
@@ -1468,10 +1659,14 @@ def _get_job(job_id: str):
     return get_from_cache(_job_key(job_id))
 
 def _run_swing_job(job_id: str, budget: float, risk: str, user_id: int, plan: str):
+    # user_id/budget/risk_appetite are echoed into every job-store write so that
+    # POST /portfolio/track can later verify ownership and rebuild a UserPortfolio
+    # row without needing a second source of truth.
+    job_owner = {'user_id': user_id, 'budget': budget, 'risk_appetite': risk}
     try:
-        _set_job(job_id, {'status': 'processing', 'progress': 5, 'result': None, 'error': None})
+        _set_job(job_id, {'status': 'processing', 'progress': 5, 'result': None, 'error': None, **job_owner})
         result = trading_api.generate_swing_portfolio(budget, risk)
-        _set_job(job_id, {'status': 'complete', 'progress': 100, 'result': result, 'error': None})
+        _set_job(job_id, {'status': 'complete', 'progress': 100, 'result': result, 'error': None, **job_owner})
         with app.app_context():
             try:
                 usage = UserUsage(user_id=user_id, endpoint='/api/v1/portfolio/swing', cost_estimate=2.0, cache_hit=False)
@@ -1481,7 +1676,7 @@ def _run_swing_job(job_id: str, budget: float, risk: str, user_id: int, plan: st
                 logger.warning(f"Usage tracking failed for job {job_id}: {e}")
     except Exception as e:
         logger.error(f"Portfolio job {job_id} failed: {e}")
-        _set_job(job_id, {'status': 'failed', 'progress': 0, 'result': None, 'error': str(e)})
+        _set_job(job_id, {'status': 'failed', 'progress': 0, 'result': None, 'error': str(e), **job_owner})
 
 def _run_position_job(job_id: str, budget: float, risk: str, time_period: int, user_id: int, plan: str):
     """DISABLED — position portfolio burns too many news API tokens."""
@@ -1500,7 +1695,8 @@ def start_swing_portfolio():
         budget = validate_budget(data.get('budget'))
         risk   = validate_risk_appetite(data.get('risk_appetite'))
         job_id = uuid.uuid4().hex
-        _set_job(job_id, {'status': 'queued', 'progress': 0, 'result': None, 'error': None})
+        _set_job(job_id, {'status': 'queued', 'progress': 0, 'result': None, 'error': None,
+                           'user_id': g.user_id, 'budget': budget, 'risk_appetite': risk})
         _executor.submit(_run_swing_job, job_id, budget, risk, g.user_id, g.user_plan)
         logger.info(f"{log_context()} Started swing portfolio job {job_id}")
         return jsonify({'success': True, 'job_id': job_id})
@@ -1532,6 +1728,83 @@ def get_portfolio_job(job_id: str):
     if not job:
         return jsonify({'success': False, 'error': 'Job not found or expired'}), 404
     return jsonify({'success': True, 'data': job})
+
+# ── Per-user portfolio tracking (persistence layer — step 1) ──────────────────
+@v1.route('/portfolio/track', methods=['POST'])
+@token_required
+@limiter.limit("10 per minute")
+def track_portfolio():
+    """Persist a completed swing-portfolio job as a UserPortfolio the user is
+    tracking. The job store (_get_job) is the only source of truth for the
+    generated holdings — this endpoint must be called while the job is still
+    in its 1-hour TTL window, before it's evicted."""
+    try:
+        data   = request.get_json() or {}
+        job_id = data.get('job_id')
+        if not job_id:
+            return jsonify({'success': False, 'error': 'job_id is required'}), 400
+
+        job = _get_job(job_id)
+        if not job:
+            return jsonify({'success': False, 'error':
+                'Portfolio job not found or expired. Generate a new portfolio and track it promptly.'}), 404
+
+        if job.get('status') != 'complete':
+            return jsonify({'success': False, 'error':
+                f"Portfolio not ready yet (status: {job.get('status')})"}), 400
+
+        if job.get('user_id') != g.user_id:
+            return jsonify({'success': False, 'error': 'Forbidden'}), 403
+
+        holdings = ((job.get('result') or {}).get('portfolio')) or []
+        if not holdings:
+            return jsonify({'success': False, 'error': 'Job result contains no holdings to track'}), 400
+
+        portfolio = UserPortfolio(
+            id            = uuid.uuid4().hex,
+            user_id       = g.user_id,
+            budget        = float(job.get('budget') or 0),
+            risk_appetite = str(job.get('risk_appetite') or ''),
+            strategy      = 'swing',
+            status        = 'active',
+        )
+        for item in holdings:
+            portfolio.positions.append(UserPortfolioPosition(
+                id                = uuid.uuid4().hex,
+                symbol            = item.get('symbol'),
+                name              = item.get('company'),
+                entry_price       = float(item.get('price') or 0),
+                stop_loss         = float(item.get('stop_loss') or 0),
+                t1                = float(item.get('target_1') or 0),
+                t2                = float(item.get('target_2') or 0),
+                t3                = (float(item['target_3']) if item.get('target_3') else None),
+                allocation_amount = (float(item['investment_amount']) if item.get('investment_amount') is not None else None),
+                shares            = (int(item['number_of_shares']) if item.get('number_of_shares') is not None else None),
+                ai_score          = (int(item['score']) if item.get('score') is not None else None),
+                status            = 'open',
+            ))
+        db.session.add(portfolio)
+        db.session.commit()
+        logger.info(f"{log_context()} Tracking portfolio {portfolio.id} from job {job_id} ({len(holdings)} positions)")
+        return jsonify({'success': True, 'data': portfolio.to_dict()}), 201
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"{log_context()} portfolio/track: {e}")
+        return jsonify({'success': False, 'error': 'Failed to track portfolio'}), 500
+
+@v1.route('/portfolio/tracked', methods=['GET'])
+@token_required
+@limiter.limit("30 per minute")
+def get_tracked_portfolios():
+    try:
+        rows = (UserPortfolio.query
+                .filter_by(user_id=g.user_id, status='active')
+                .order_by(UserPortfolio.created_at.desc())
+                .all())
+        return jsonify({'success': True, 'data': [p.to_dict() for p in rows]})
+    except Exception as e:
+        logger.error(f"{log_context()} portfolio/tracked GET: {e}")
+        return jsonify({'success': False, 'error': 'Failed to load tracked portfolios'}), 500
 
 @v1.route('/stocks', methods=['GET'])
 def get_all_stocks():
@@ -1761,16 +2034,26 @@ def run_notifications_endpoint():
     secret = request.headers.get('X-Job-Secret', '')
     if not os.getenv('JOB_SECRET') or secret != os.getenv('JOB_SECRET'):
         return jsonify({'success': False, 'error': 'Forbidden'}), 403
-    def _bg():
+    def _bg_watchlist():
         with app.app_context():
             try:
                 summary = run_notification_job()
                 logger.info(f"[notify] job complete: {summary}")
             except Exception as e:
                 logger.error(f"[notify] job failed: {e}\n{traceback.format_exc()}")
-    _executor.submit(_bg)
+    def _bg_portfolios():
+        with app.app_context():
+            try:
+                summary = evaluate_tracked_portfolios()
+                logger.info(f"[portfolio-eval] job complete: {summary}")
+            except Exception as e:
+                logger.error(f"[portfolio-eval] job failed: {e}\n{traceback.format_exc()}")
+    # Same external trigger runs both jobs — one submit each, independent
+    # try/except so a failure in one never blocks or masks the other.
+    _executor.submit(_bg_watchlist)
+    _executor.submit(_bg_portfolios)
     return jsonify({'success': True, 'status': 'started',
-                    'message': 'Notification job started in background'}), 202
+                    'message': 'Notification and portfolio-evaluation jobs started in background'}), 202
 
 @v1.route('/health', methods=['GET'])
 def health_check():
