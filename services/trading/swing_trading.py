@@ -742,16 +742,53 @@ class EnhancedSwingTradingSystem:
             logger.error(f"Error getting stock symbols: {e}")
             return []
     def get_all_analyzable_symbols(self) -> List[str]:
-        """Every symbol a user can analyze (portfolio 240 + small-caps).
-        Used by the /stocks browse list so small-caps are discoverable.
-        Portfolio generation still uses get_all_stock_symbols() (indian_stocks only)."""
+        """Every symbol a user can discover and analyze.
+        Built-in reference (~240 portfolio + ~200 small-caps) UNION the committed
+        NSE Total Market CSV (~750 liquid names). Drives only the /stocks browse
+        list; analysis itself is NOT gated by it. Portfolio generation still uses
+        get_all_stock_symbols() (indian_stocks only), so these never enter a portfolio."""
         try:
-            ref = getattr(self, 'all_stocks_reference', None) or self.indian_stocks
-            return list(ref.keys())
+            ref = getattr(self, 'all_stocks_reference', None)
+            if ref is None:
+                ref = self.all_stocks_reference = dict(self.indian_stocks)
+            if not getattr(self, '_analysis_csv_loaded', False):
+                self._merge_analysis_csv(ref)
+                self._analysis_csv_loaded = True
+            return sorted(ref.keys())
         except Exception as e:
             logger.error(f"Error getting analyzable symbols: {e}")
-            return list(self.indian_stocks.keys())
-          
+            ref = getattr(self, 'all_stocks_reference', None) or self.indian_stocks
+            return list(ref.keys())
+
+    def _merge_analysis_csv(self, ref: dict) -> None:
+        """Merge the committed NSE Total Market CSV (symbol, name, sector) into the
+        analyzable reference. Safe no-op if the file is missing."""
+        import csv
+        path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "..", "..",
+            "ind_niftytotalmarket_list.csv",
+        )
+        try:
+            added = 0
+            with open(path, newline="", encoding="utf-8-sig") as f:
+                for row in csv.DictReader(f):
+                    series = (row.get("Series") or "").strip().upper()
+                    if series and series not in ("EQ", "BE"):
+                        continue
+                    sym = (row.get("Symbol") or "").strip().upper()
+                    if not sym or sym in ref:
+                        continue
+                    ref[sym] = {
+                        "name": (row.get("Company Name") or sym).strip(),
+                        "sector": (row.get("Industry") or "Unknown").strip(),
+                    }
+                    added += 1
+            logger.info("Analysis CSV merged: +%d symbols (%d analyzable total)", added, len(ref))
+        except FileNotFoundError:
+            logger.warning("Analysis CSV missing at %s — using built-in list only", path)
+        except Exception as e:
+            logger.warning("Analysis CSV load failed: %s", e)
+
     @lru_cache(maxsize=1000)
     def get_stock_info_from_db(self, symbol: str) -> Dict:
         try:
